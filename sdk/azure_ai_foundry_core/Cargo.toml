@@ -24,3 +24,4 @@ tokio.workspace = true
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock.workspace = true
+async-trait = "0.1"

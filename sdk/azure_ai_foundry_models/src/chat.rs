@@ -226,3 +226,382 @@ pub async fn complete(
     let body = response.json::<ChatCompletionResponse>().await?;
     Ok(body)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use azure_ai_foundry_core::auth::FoundryCredential;
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // --- Builder tests ---
+
+    #[test]
+    fn builder_with_required_fields_only() {
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        assert_eq!(request.model, "gpt-4o");
+        assert_eq!(request.messages.len(), 1);
+        assert!(request.temperature.is_none());
+        assert!(request.top_p.is_none());
+        assert!(request.max_tokens.is_none());
+        assert!(request.stream.is_none());
+        assert!(request.stop.is_none());
+        assert!(request.presence_penalty.is_none());
+        assert!(request.frequency_penalty.is_none());
+    }
+
+    #[test]
+    fn builder_with_all_fields() {
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o-mini")
+            .message(Message::system("You are helpful."))
+            .message(Message::user("Hi"))
+            .temperature(0.7)
+            .top_p(0.9)
+            .max_tokens(100)
+            .stop(vec!["END".into()])
+            .presence_penalty(0.5)
+            .frequency_penalty(0.3)
+            .build();
+
+        assert_eq!(request.model, "gpt-4o-mini");
+        assert_eq!(request.messages.len(), 2);
+        assert_eq!(request.temperature, Some(0.7));
+        assert_eq!(request.top_p, Some(0.9));
+        assert_eq!(request.max_tokens, Some(100));
+        assert_eq!(request.stop, Some(vec!["END".into()]));
+        assert_eq!(request.presence_penalty, Some(0.5));
+        assert_eq!(request.frequency_penalty, Some(0.3));
+    }
+
+    #[test]
+    fn builder_messages_method() {
+        let messages = vec![
+            Message::system("System prompt"),
+            Message::user("User message"),
+            Message::assistant("Assistant response"),
+        ];
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .messages(messages)
+            .build();
+
+        assert_eq!(request.messages.len(), 3);
+        assert_eq!(request.messages[0].role, Role::System);
+        assert_eq!(request.messages[1].role, Role::User);
+        assert_eq!(request.messages[2].role, Role::Assistant);
+    }
+
+    #[test]
+    #[should_panic(expected = "model is required")]
+    fn builder_without_model_panics() {
+        ChatCompletionRequest::builder()
+            .message(Message::user("Hello"))
+            .build();
+    }
+
+    // --- Message constructor tests ---
+
+    #[test]
+    fn message_system_constructor() {
+        let msg = Message::system("You are a helpful assistant.");
+        assert_eq!(msg.role, Role::System);
+        assert_eq!(msg.content, Some("You are a helpful assistant.".into()));
+    }
+
+    #[test]
+    fn message_user_constructor() {
+        let msg = Message::user("What is Rust?");
+        assert_eq!(msg.role, Role::User);
+        assert_eq!(msg.content, Some("What is Rust?".into()));
+    }
+
+    #[test]
+    fn message_assistant_constructor() {
+        let msg = Message::assistant("Rust is a systems programming language.");
+        assert_eq!(msg.role, Role::Assistant);
+        assert_eq!(msg.content, Some("Rust is a systems programming language.".into()));
+    }
+
+    // --- Serialization tests ---
+
+    #[test]
+    fn role_serialization() {
+        assert_eq!(serde_json::to_string(&Role::System).unwrap(), "\"system\"");
+        assert_eq!(serde_json::to_string(&Role::User).unwrap(), "\"user\"");
+        assert_eq!(serde_json::to_string(&Role::Assistant).unwrap(), "\"assistant\"");
+        assert_eq!(serde_json::to_string(&Role::Tool).unwrap(), "\"tool\"");
+    }
+
+    #[test]
+    fn role_deserialization() {
+        assert_eq!(serde_json::from_str::<Role>("\"system\"").unwrap(), Role::System);
+        assert_eq!(serde_json::from_str::<Role>("\"user\"").unwrap(), Role::User);
+        assert_eq!(serde_json::from_str::<Role>("\"assistant\"").unwrap(), Role::Assistant);
+        assert_eq!(serde_json::from_str::<Role>("\"tool\"").unwrap(), Role::Tool);
+    }
+
+    #[test]
+    fn request_serialization_skips_none_fields() {
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hi"))
+            .build();
+
+        let json = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(json["model"], "gpt-4o");
+        assert!(json.get("temperature").is_none());
+        assert!(json.get("top_p").is_none());
+        assert!(json.get("max_tokens").is_none());
+        assert!(json.get("stream").is_none());
+        assert!(json.get("stop").is_none());
+        assert!(json.get("presence_penalty").is_none());
+        assert!(json.get("frequency_penalty").is_none());
+    }
+
+    #[test]
+    fn request_serialization_includes_set_fields() {
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hi"))
+            .temperature(0.5)
+            .max_tokens(50)
+            .build();
+
+        let json = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(json["model"], "gpt-4o");
+        assert_eq!(json["temperature"], 0.5);
+        assert_eq!(json["max_tokens"], 50);
+    }
+
+    #[test]
+    fn response_deserialization() {
+        let json = serde_json::json!({
+            "id": "chatcmpl-abc123",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello! How can I help you today?"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 15,
+                "total_tokens": 25
+            }
+        });
+
+        let response: ChatCompletionResponse = serde_json::from_value(json).unwrap();
+
+        assert_eq!(response.id, "chatcmpl-abc123");
+        assert_eq!(response.object, "chat.completion");
+        assert_eq!(response.created, 1700000000);
+        assert_eq!(response.model, "gpt-4o");
+        assert_eq!(response.choices.len(), 1);
+        assert_eq!(response.choices[0].index, 0);
+        assert_eq!(response.choices[0].message.role, Role::Assistant);
+        assert_eq!(
+            response.choices[0].message.content,
+            Some("Hello! How can I help you today?".into())
+        );
+        assert_eq!(response.choices[0].finish_reason, Some("stop".into()));
+
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, Some(15));
+        assert_eq!(usage.total_tokens, 25);
+    }
+
+    #[test]
+    fn response_deserialization_without_usage() {
+        let json = serde_json::json!({
+            "id": "chatcmpl-abc123",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hi!"
+                },
+                "finish_reason": null
+            }]
+        });
+
+        let response: ChatCompletionResponse = serde_json::from_value(json).unwrap();
+
+        assert!(response.usage.is_none());
+        assert!(response.choices[0].finish_reason.is_none());
+    }
+
+    // --- Integration tests with wiremock ---
+
+    async fn setup_mock_client(server: &MockServer) -> FoundryClient {
+        FoundryClient::builder()
+            .endpoint(server.uri())
+            .credential(FoundryCredential::api_key("test-api-key"))
+            .build()
+            .expect("should build client")
+    }
+
+    #[tokio::test]
+    async fn complete_success() {
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "chatcmpl-test123",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Rust is a systems programming language."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 10,
+                "total_tokens": 30
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .and(header("Authorization", "Bearer test-api-key"))
+            .and(header("content-type", "application/json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::system("You are helpful."))
+            .message(Message::user("What is Rust?"))
+            .build();
+
+        let response = complete(&client, &request).await.expect("should succeed");
+
+        assert_eq!(response.id, "chatcmpl-test123");
+        assert_eq!(response.choices.len(), 1);
+        assert_eq!(
+            response.choices[0].message.content,
+            Some("Rust is a systems programming language.".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn complete_with_parameters() {
+        let server = MockServer::start().await;
+
+        let expected_request = serde_json::json!({
+            "model": "gpt-4o-mini",
+            "messages": [
+                {"role": "user", "content": "Hello"}
+            ],
+            "temperature": 0.5,
+            "max_tokens": 100
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .and(body_json(&expected_request))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "gpt-4o-mini",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi!"},
+                    "finish_reason": "stop"
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o-mini")
+            .message(Message::user("Hello"))
+            .temperature(0.5)
+            .max_tokens(100)
+            .build();
+
+        let response = complete(&client, &request).await.expect("should succeed");
+        assert_eq!(response.model, "gpt-4o-mini");
+    }
+
+    #[tokio::test]
+    async fn complete_api_error() {
+        let server = MockServer::start().await;
+
+        let error_response = serde_json::json!({
+            "error": {
+                "code": "InvalidModel",
+                "message": "The model 'nonexistent' does not exist"
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(&error_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("nonexistent")
+            .message(Message::user("Hello"))
+            .build();
+
+        let result = complete(&client, &request).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("InvalidModel"));
+    }
+
+    #[tokio::test]
+    async fn complete_rate_limit_error() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("Rate limit exceeded"))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let result = complete(&client, &request).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("429"));
+    }
+}
