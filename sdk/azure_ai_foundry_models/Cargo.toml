@@ -1,0 +1,24 @@
+[package]
+name = "azure_ai_foundry_models"
+description = "Chat completions and embeddings for Azure AI Foundry - Rust SDK"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.1.0" }
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+futures.workspace = true
+tokio-stream.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+wiremock.workspace = true

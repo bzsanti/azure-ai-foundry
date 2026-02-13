@@ -1,0 +1,49 @@
+[workspace]
+resolver = "2"
+members = [
+    "sdk/azure_ai_foundry_core",
+    "sdk/azure_ai_foundry_models",
+    # "sdk/azure_ai_foundry_agents",  # Coming in v0.2.0
+    # "sdk/azure_ai_foundry_tools",   # Coming in v0.3.0
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/bzsanti/azure-ai-foundry"
+homepage = "https://github.com/bzsanti/azure-ai-foundry"
+documentation = "https://docs.rs/azure_ai_foundry_core"
+keywords = ["azure", "ai", "foundry", "microsoft", "openai"]
+categories = ["api-bindings", "web-programming::http-client"]
+
+[workspace.dependencies]
+# Azure SDK
+azure_core = "0.30"
+azure_identity = "0.25"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP & serialization
+reqwest = { version = "0.12", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Streaming
+futures = "0.3"
+tokio-stream = "0.1"
+
+# Error handling
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+
+# Testing
+wiremock = "0.6"
+
+# Utils
+url = "2"
+secrecy = "0.10"
