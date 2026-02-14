@@ -129,11 +129,13 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-02-14)
+## Session Status (2025-02-15)
 
-**Branch:** `feat/real-auth`
+**Branch:** `main`
 
-**v0.1.0 Status:** Ready for Release
+**v0.1.0 Status:** RELEASED
+
+**Release Tag:** `v0.1.0` pushed to GitHub, release workflow triggered.
 
 **Completed Features:**
 - Real authentication with `azure_identity` (`Arc<dyn TokenCredential>`)
@@ -152,6 +154,11 @@ When implementing:
 7. API consistency with `IntoIterator` bounds
 8. Error tests with pattern matching
 9. Test constants centralization
+
+**Release Infrastructure:**
+- GitHub Actions release workflow (`.github/workflows/release.yml`)
+- CHANGELOG.md following Keep a Changelog format
+- Automatic crates.io publishing on tag push
 
 **Test Summary:**
 - 97 tests passing (45 core + 52 models + 14 doc-tests)
