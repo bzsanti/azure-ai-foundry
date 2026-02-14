@@ -38,6 +38,10 @@ pub enum FoundryError {
     /// An error from the Azure SDK.
     #[error("Azure SDK error: {0}")]
     AzureSdk(String),
+
+    /// A required builder field is missing.
+    #[error("Builder error: {0}")]
+    Builder(String),
 }
 
 impl From<azure_core::Error> for FoundryError {
@@ -118,5 +122,11 @@ mod tests {
             .expect_err("should fail");
         let foundry_err: FoundryError = json_err.into();
         assert!(matches!(foundry_err, FoundryError::Serialization(_)));
+    }
+
+    #[test]
+    fn builder_error_display() {
+        let err = FoundryError::Builder("model is required".into());
+        assert_eq!(err.to_string(), "Builder error: model is required");
     }
 }

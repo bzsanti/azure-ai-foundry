@@ -223,6 +223,18 @@ impl FoundryClient {
         }
     }
 
+    /// Maximum length for error messages to prevent sensitive data leaks.
+    const MAX_ERROR_MESSAGE_LEN: usize = 1000;
+
+    /// Truncate a message if it exceeds the maximum length.
+    fn truncate_message(msg: &str) -> String {
+        if msg.len() > Self::MAX_ERROR_MESSAGE_LEN {
+            format!("{}... (truncated)", &msg[..Self::MAX_ERROR_MESSAGE_LEN])
+        } else {
+            msg.to_string()
+        }
+    }
+
     /// Check the response status and return an error if not successful.
     async fn check_response(response: reqwest::Response) -> FoundryResult<reqwest::Response> {
         if response.status().is_success() {
@@ -240,18 +252,19 @@ impl FoundryClient {
                             .and_then(|c| c.as_str())
                             .unwrap_or("unknown")
                             .to_string(),
-                        message: err_obj
-                            .get("message")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or(&body)
-                            .to_string(),
+                        message: Self::truncate_message(
+                            err_obj
+                                .get("message")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or(&body),
+                        ),
                     });
                 }
             }
 
             Err(FoundryError::Http {
                 status,
-                message: body,
+                message: Self::truncate_message(&body),
             })
         }
     }
@@ -337,10 +350,12 @@ impl FoundryClientBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
+    #[serial]
     fn builder_requires_endpoint() {
         // Clear env var to ensure test isolation
         std::env::remove_var("AZURE_AI_FOUNDRY_ENDPOINT");
@@ -392,6 +407,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn builder_uses_endpoint_from_env() {
         // Save original value
         let original = std::env::var("AZURE_AI_FOUNDRY_ENDPOINT").ok();
@@ -416,6 +432,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn builder_endpoint_overrides_env() {
         // Save original value
         let original = std::env::var("AZURE_AI_FOUNDRY_ENDPOINT").ok();

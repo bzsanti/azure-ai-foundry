@@ -139,10 +139,14 @@ impl ChatCompletionRequestBuilder {
         self
     }
 
-    /// Build the request. Panics if `model` is not set.
-    pub fn build(self) -> ChatCompletionRequest {
-        ChatCompletionRequest {
-            model: self.model.expect("model is required"),
+    /// Build the request, returning an error if required fields are missing.
+    pub fn try_build(self) -> FoundryResult<ChatCompletionRequest> {
+        let model = self
+            .model
+            .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
+
+        Ok(ChatCompletionRequest {
+            model,
             messages: self.messages,
             temperature: self.temperature,
             top_p: self.top_p,
@@ -151,7 +155,14 @@ impl ChatCompletionRequestBuilder {
             stop: self.stop,
             presence_penalty: self.presence_penalty,
             frequency_penalty: self.frequency_penalty,
-        }
+        })
+    }
+
+    /// Build the request. Panics if `model` is not set.
+    ///
+    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    pub fn build(self) -> ChatCompletionRequest {
+        self.try_build().expect("builder validation failed")
     }
 }
 
@@ -363,46 +374,76 @@ pub async fn complete_stream(
     Ok(parse_sse_stream(response))
 }
 
-/// Internal request type with stream field always set to true.
+/// Internal request type for streaming chat completions.
+///
+/// This is a zero-copy variant of [`ChatCompletionRequest`] that:
+/// - Uses references to avoid cloning request data
+/// - Always sets `stream: true` for SSE responses
+/// - Is used internally by [`complete_stream`]
+///
+/// Users should construct [`ChatCompletionRequest`] instead of this type directly.
 #[derive(Serialize)]
 struct StreamingRequest<'a> {
+    /// Model ID for the completion.
     model: &'a str,
+    /// Conversation messages.
     messages: &'a [Message],
+    /// Sampling temperature (0.0 to 2.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+    /// Nucleus sampling probability.
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
+    /// Maximum tokens to generate.
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
+    /// Always `true` for streaming requests.
     stream: bool,
+    /// Stop sequences.
     #[serde(skip_serializing_if = "Option::is_none")]
     stop: Option<&'a [String]>,
+    /// Presence penalty (-2.0 to 2.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     presence_penalty: Option<f32>,
+    /// Frequency penalty (-2.0 to 2.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     frequency_penalty: Option<f32>,
 }
 
 /// Parse Server-Sent Events (SSE) stream into ChatCompletionChunks.
+///
+/// Optimized for performance:
+/// - Uses `memchr` for fast newline detection
+/// - Works with `Vec<u8>` to minimize UTF-8 validation overhead
+/// - Minimizes allocations by draining processed bytes
 fn parse_sse_stream(
     response: reqwest::Response,
 ) -> impl Stream<Item = FoundryResult<ChatCompletionChunk>> {
     let byte_stream = response.bytes_stream();
 
-    // Buffer for incomplete lines across chunks
+    // Buffer for incomplete lines across chunks (bytes for efficiency)
     stream::unfold(
-        (byte_stream, String::new()),
+        (byte_stream, Vec::<u8>::new()),
         |(mut byte_stream, mut buffer)| async move {
             use futures::TryStreamExt;
 
             loop {
-                // Check if we have a complete line in buffer
-                if let Some(newline_pos) = buffer.find('\n') {
-                    let line = buffer[..newline_pos].to_string();
-                    buffer = buffer[newline_pos + 1..].to_string();
+                // Fast newline search using memchr
+                if let Some(newline_pos) = memchr::memchr(b'\n', &buffer) {
+                    // Extract line bytes and drain from buffer
+                    let line_bytes: Vec<u8> = buffer.drain(..=newline_pos).collect();
+
+                    // Convert to string only when needed (skip trailing newline)
+                    let line = match std::str::from_utf8(&line_bytes[..line_bytes.len() - 1]) {
+                        Ok(s) => s,
+                        Err(_) => {
+                            // Invalid UTF-8, skip this line
+                            continue;
+                        }
+                    };
 
                     // Parse the line
-                    if let Some(chunk) = parse_sse_line(&line) {
+                    if let Some(chunk) = parse_sse_line(line) {
                         return Some((chunk, (byte_stream, buffer)));
                     }
                     // Continue to next line if this one was skipped
@@ -412,15 +453,18 @@ fn parse_sse_stream(
                 // Need more data
                 match TryStreamExt::try_next(&mut byte_stream).await {
                     Ok(Some(bytes)) => {
-                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+                        buffer.extend_from_slice(&bytes);
                     }
                     Ok(None) => {
                         // Stream ended, try remaining buffer
                         if !buffer.is_empty() {
-                            let line = std::mem::take(&mut buffer);
-                            if let Some(chunk) = parse_sse_line(&line) {
-                                return Some((chunk, (byte_stream, buffer)));
+                            if let Ok(line) = std::str::from_utf8(&buffer) {
+                                if let Some(chunk) = parse_sse_line(line) {
+                                    buffer.clear();
+                                    return Some((chunk, (byte_stream, buffer)));
+                                }
                             }
+                            buffer.clear();
                         }
                         return None;
                     }
@@ -468,7 +512,6 @@ fn parse_sse_line(line: &str) -> Option<FoundryResult<ChatCompletionChunk>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use azure_ai_foundry_core::auth::FoundryCredential;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -541,6 +584,30 @@ mod tests {
         ChatCompletionRequest::builder()
             .message(Message::user("Hello"))
             .build();
+    }
+
+    #[test]
+    fn try_build_returns_error_when_model_missing() {
+        let result = ChatCompletionRequest::builder()
+            .message(Message::user("Hello"))
+            .try_build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, azure_ai_foundry_core::error::FoundryError::Builder(_)));
+        assert!(err.to_string().contains("model"));
+    }
+
+    #[test]
+    fn try_build_success() {
+        let result = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .try_build();
+
+        assert!(result.is_ok());
+        let request = result.unwrap();
+        assert_eq!(request.model, "gpt-4o");
     }
 
     // --- Message constructor tests ---
@@ -687,13 +754,7 @@ mod tests {
 
     // --- Integration tests with wiremock ---
 
-    async fn setup_mock_client(server: &MockServer) -> FoundryClient {
-        FoundryClient::builder()
-            .endpoint(server.uri())
-            .credential(FoundryCredential::api_key("test-api-key"))
-            .build()
-            .expect("should build client")
-    }
+    use crate::test_utils::setup_mock_client;
 
     #[tokio::test]
     async fn complete_success() {
@@ -815,8 +876,13 @@ mod tests {
         let result = complete(&client, &request).await;
 
         assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("InvalidModel"));
+        match result.unwrap_err() {
+            FoundryError::Api { code, message } => {
+                assert_eq!(code, "InvalidModel");
+                assert!(message.contains("does not exist"));
+            }
+            other => panic!("Expected Api error, got {:?}", other),
+        }
     }
 
     #[tokio::test]
@@ -839,8 +905,13 @@ mod tests {
         let result = complete(&client, &request).await;
 
         assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("429"));
+        match result.unwrap_err() {
+            FoundryError::Http { status, message } => {
+                assert_eq!(status, 429);
+                assert!(message.contains("Rate limit"));
+            }
+            other => panic!("Expected Http error, got {:?}", other),
+        }
     }
 
     // --- Streaming types tests ---

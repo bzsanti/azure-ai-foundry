@@ -25,3 +25,4 @@ tokio.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock.workspace = true
 async-trait = "0.1"
+serial_test = "3.2"

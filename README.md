@@ -85,12 +85,12 @@ export AZURE_AI_FOUNDRY_API_KEY="your-key"  # Falls back to Entra ID if not set
 
 ## Roadmap
 
-### v0.1.0 (Current)
+### v0.1.0 (Current) - Ready for Release
 - [x] Project structure and CI
 - [x] Chat completions (sync)
 - [x] Chat completions (streaming)
 - [x] Entra ID token acquisition via `azure_identity`
-- [ ] Embeddings
+- [x] Embeddings
 
 ### v0.2.0
 - [ ] Agent Service (threads, tool calling)

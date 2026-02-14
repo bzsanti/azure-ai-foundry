@@ -237,6 +237,7 @@ impl std::fmt::Debug for FoundryCredential {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::time::Duration;
 
     // Mock TokenCredential for testing
@@ -326,6 +327,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn from_env_with_api_key() {
         // Save original value
         let original = std::env::var("AZURE_AI_FOUNDRY_API_KEY").ok();
@@ -348,6 +350,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn from_env_with_empty_api_key_falls_back() {
         // Save original value
         let original = std::env::var("AZURE_AI_FOUNDRY_API_KEY").ok();

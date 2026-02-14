@@ -133,26 +133,26 @@ When implementing:
 
 **Branch:** `feat/real-auth`
 
-**Session Summary:**
-- Implemented chat completions streaming via SSE
-- Added TDD methodology section to CLAUDE.md
-- Created `/plan-tdd` slash command for TDD planning
-- Updated roadmap in README.md
+**v0.1.0 Status:** Ready for Release
 
 **Completed Features:**
 - Real authentication with `azure_identity` (`Arc<dyn TokenCredential>`)
 - API key and Entra ID authentication
 - Chat completions (sync + streaming)
-- SSE parsing with line buffering
+- SSE parsing optimized with `memchr`
+- Embeddings API (`embed()` function with builder pattern)
 
-**Streaming Implementation:**
-- `ChatCompletionChunk`, `ChunkChoice`, `Delta` types
-- `complete_stream()` returns `impl Stream<Item = FoundryResult<ChatCompletionChunk>>`
-- 12 streaming tests
+**Quality Improvements (9 phases):**
+1. Test isolation with `serial_test` crate
+2. Builder pattern with `try_build()` returning `Result`
+3. SSE performance optimized (memchr, Vec<u8> buffer)
+4. Security logging with message truncation
+5. Documentation for internal types
+6. Centralized test helpers
+7. API consistency with `IntoIterator` bounds
+8. Error tests with pattern matching
+9. Test constants centralization
 
 **Test Summary:**
-- 84 tests passing (44 core + 29 models + 11 doc-tests)
-- All clippy checks passing
-
-**Pending for v0.1.0:**
-- Embeddings API
+- 97 tests passing (45 core + 52 models + 14 doc-tests)
+- All clippy checks passing (0 warnings)
