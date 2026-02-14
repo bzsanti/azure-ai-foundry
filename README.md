@@ -85,13 +85,18 @@ export AZURE_AI_FOUNDRY_API_KEY="your-key"  # Falls back to Entra ID if not set
 
 ## Roadmap
 
+### v0.1.0 (Current) - Ready for Release
 - [x] Project structure and CI
-- [ ] Chat completions (sync)
-- [ ] Chat completions (streaming)
-- [ ] Embeddings
-- [ ] Entra ID token acquisition via `azure_identity`
-- [ ] Agent Service (v0.2.0)
-- [ ] Foundry Tools (v0.3.0)
+- [x] Chat completions (sync)
+- [x] Chat completions (streaming)
+- [x] Entra ID token acquisition via `azure_identity`
+- [x] Embeddings
+
+### v0.2.0
+- [ ] Agent Service (threads, tool calling)
+
+### v0.3.0
+- [ ] Foundry Tools (Vision, Document Intelligence, Translation)
 
 ## Contributing
 
