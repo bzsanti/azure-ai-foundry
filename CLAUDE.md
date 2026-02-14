@@ -73,19 +73,86 @@ sdk/
 - Use Conventional Commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `ci:`, `chore:`
 - CI runs with `RUSTFLAGS="-D warnings"` — all warnings are errors
 
-## Session Status (2026-02-13)
+## TDD Methodology (MANDATORY)
+
+**All implementation plans MUST follow strict Test-Driven Development.**
+
+### Planning Phase (planning-agent)
+When creating implementation plans, structure them as TDD cycles:
+
+1. **RED Phase** - Write failing test first
+   - Define test case with clear assertions
+   - Specify expected behavior
+   - Test MUST fail initially (code doesn't exist yet)
+
+2. **GREEN Phase** - Minimal implementation
+   - Write the minimum code to make the test pass
+   - No extra features, no premature optimization
+   - Focus only on passing the current test
+
+3. **REFACTOR Phase** - Improve code quality
+   - Clean up implementation
+   - Remove duplication
+   - Improve naming and structure
+   - Tests must still pass
+
+### Plan Format
+Every plan must be structured as:
+```
+## Task: [Feature Name]
+
+### Cycle 1: [Smallest testable unit]
+- RED: Write test for [specific behavior]
+- GREEN: Implement [minimal code]
+- REFACTOR: [improvements if needed]
+
+### Cycle 2: [Next testable unit]
+- RED: Write test for [next behavior]
+- GREEN: Implement [minimal code]
+- REFACTOR: [improvements if needed]
+
+[Continue cycles...]
+```
+
+### Implementation Phase
+When implementing:
+1. **Write the test FIRST** - before any production code
+2. **Run the test** - verify it fails
+3. **Write minimal code** - only enough to pass
+4. **Run the test** - verify it passes
+5. **Refactor if needed** - keep tests green
+6. **Repeat** for next test case
+
+### Rules
+- NEVER write production code without a failing test
+- NEVER skip the RED phase
+- Each test should test ONE behavior
+- Tests must be independent and isolated
+
+## Session Status (2026-02-14)
 
 **Branch:** `feat/real-auth`
 
-**Completed:**
-- Implemented real authentication with `azure_identity` (`Arc<dyn TokenCredential>`)
-- Added support for API key and Entra ID authentication
-- Scope: `https://cognitiveservices.azure.com/.default`
-- Test coverage: **94.24%** (180/191 lines)
+**Session Summary:**
+- Implemented chat completions streaming via SSE
+- Added TDD methodology section to CLAUDE.md
+- Created `/plan-tdd` slash command for TDD planning
+- Updated roadmap in README.md
+
+**Completed Features:**
+- Real authentication with `azure_identity` (`Arc<dyn TokenCredential>`)
+- API key and Entra ID authentication
+- Chat completions (sync + streaming)
+- SSE parsing with line buffering
+
+**Streaming Implementation:**
+- `ChatCompletionChunk`, `ChunkChoice`, `Delta` types
+- `complete_stream()` returns `impl Stream<Item = FoundryResult<ChatCompletionChunk>>`
+- 12 streaming tests
 
 **Test Summary:**
-- 70 tests passing (44 core + 17 models + 9 doc-tests)
-- `auth.rs`: 86.2% coverage
-- `client.rs`: 96.4% coverage
-- `error.rs`: 100% coverage
-- `chat.rs`: 100% coverage
+- 84 tests passing (44 core + 29 models + 11 doc-tests)
+- All clippy checks passing
+
+**Pending for v0.1.0:**
+- Embeddings API

@@ -1,8 +1,36 @@
 //! Chat completion types and API calls for Azure AI Foundry Models.
+//!
+//! This module provides both synchronous (single response) and streaming
+//! chat completion APIs.
+//!
+//! # Streaming Example
+//!
+//! ```rust,no_run
+//! # use azure_ai_foundry_core::client::FoundryClient;
+//! # use azure_ai_foundry_models::chat::*;
+//! # use futures::StreamExt;
+//! # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
+//! let request = ChatCompletionRequest::builder()
+//!     .model("gpt-4o")
+//!     .message(Message::user("Tell me a story"))
+//!     .build();
+//!
+//! let stream = complete_stream(client, &request).await?;
+//! let mut stream = std::pin::pin!(stream);
+//! while let Some(chunk) = stream.next().await {
+//!     let chunk = chunk?;
+//!     if let Some(content) = chunk.choices.first().and_then(|c| c.delta.content.as_ref()) {
+//!         print!("{}", content);
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 use azure_ai_foundry_core::client::FoundryClient;
-use azure_ai_foundry_core::error::FoundryResult;
+use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
 use azure_ai_foundry_core::models::Usage;
+use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -194,6 +222,62 @@ pub struct Choice {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming response types
+// ---------------------------------------------------------------------------
+
+/// A streaming chunk from a chat completion response.
+///
+/// This represents a single Server-Sent Event (SSE) from the streaming API.
+/// Each chunk contains partial content that should be concatenated to form
+/// the complete response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatCompletionChunk {
+    /// Unique identifier for this completion.
+    pub id: String,
+
+    /// Object type, always "chat.completion.chunk".
+    pub object: String,
+
+    /// Unix timestamp when the chunk was created.
+    pub created: u64,
+
+    /// Model used for the completion.
+    pub model: String,
+
+    /// List of choices (usually one for non-n requests).
+    pub choices: Vec<ChunkChoice>,
+
+    /// Usage statistics (only present in the final chunk when requested).
+    pub usage: Option<Usage>,
+}
+
+/// A single choice in a streaming chunk.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChunkChoice {
+    /// Index of this choice.
+    pub index: u32,
+
+    /// The delta containing new content.
+    pub delta: Delta,
+
+    /// Reason the generation stopped (only in final chunk).
+    pub finish_reason: Option<String>,
+}
+
+/// Delta content in a streaming chunk.
+///
+/// Contains the incremental content added in this chunk.
+/// The first chunk typically contains the role, subsequent chunks contain content.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Delta {
+    /// Role of the assistant (only in first chunk).
+    pub role: Option<Role>,
+
+    /// Incremental content to append.
+    pub content: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
 // API functions
 // ---------------------------------------------------------------------------
 
@@ -225,6 +309,160 @@ pub async fn complete(
 
     let body = response.json::<ChatCompletionResponse>().await?;
     Ok(body)
+}
+
+/// Send a streaming chat completion request.
+///
+/// Returns a stream of [`ChatCompletionChunk`]s that can be consumed
+/// as they arrive from the server.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use azure_ai_foundry_core::client::FoundryClient;
+/// # use azure_ai_foundry_models::chat::*;
+/// # use futures::StreamExt;
+/// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
+/// let request = ChatCompletionRequest::builder()
+///     .model("gpt-4o")
+///     .message(Message::user("Hello!"))
+///     .build();
+///
+/// let stream = complete_stream(client, &request).await?;
+/// let mut stream = std::pin::pin!(stream);
+/// while let Some(chunk) = stream.next().await {
+///     let chunk = chunk?;
+///     if let Some(content) = chunk.choices.first().and_then(|c| c.delta.content.as_ref()) {
+///         print!("{}", content);
+///     }
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub async fn complete_stream(
+    client: &FoundryClient,
+    request: &ChatCompletionRequest,
+) -> FoundryResult<impl Stream<Item = FoundryResult<ChatCompletionChunk>>> {
+    // Create a modified request with stream: true
+    let stream_request = StreamingRequest {
+        model: &request.model,
+        messages: &request.messages,
+        temperature: request.temperature,
+        top_p: request.top_p,
+        max_tokens: request.max_tokens,
+        stream: true,
+        stop: request.stop.as_deref(),
+        presence_penalty: request.presence_penalty,
+        frequency_penalty: request.frequency_penalty,
+    };
+
+    let response = client
+        .post_stream("/openai/v1/chat/completions", &stream_request)
+        .await?;
+
+    Ok(parse_sse_stream(response))
+}
+
+/// Internal request type with stream field always set to true.
+#[derive(Serialize)]
+struct StreamingRequest<'a> {
+    model: &'a str,
+    messages: &'a [Message],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<f32>,
+}
+
+/// Parse Server-Sent Events (SSE) stream into ChatCompletionChunks.
+fn parse_sse_stream(
+    response: reqwest::Response,
+) -> impl Stream<Item = FoundryResult<ChatCompletionChunk>> {
+    let byte_stream = response.bytes_stream();
+
+    // Buffer for incomplete lines across chunks
+    stream::unfold(
+        (byte_stream, String::new()),
+        |(mut byte_stream, mut buffer)| async move {
+            use futures::TryStreamExt;
+
+            loop {
+                // Check if we have a complete line in buffer
+                if let Some(newline_pos) = buffer.find('\n') {
+                    let line = buffer[..newline_pos].to_string();
+                    buffer = buffer[newline_pos + 1..].to_string();
+
+                    // Parse the line
+                    if let Some(chunk) = parse_sse_line(&line) {
+                        return Some((chunk, (byte_stream, buffer)));
+                    }
+                    // Continue to next line if this one was skipped
+                    continue;
+                }
+
+                // Need more data
+                match TryStreamExt::try_next(&mut byte_stream).await {
+                    Ok(Some(bytes)) => {
+                        buffer.push_str(&String::from_utf8_lossy(&bytes));
+                    }
+                    Ok(None) => {
+                        // Stream ended, try remaining buffer
+                        if !buffer.is_empty() {
+                            let line = std::mem::take(&mut buffer);
+                            if let Some(chunk) = parse_sse_line(&line) {
+                                return Some((chunk, (byte_stream, buffer)));
+                            }
+                        }
+                        return None;
+                    }
+                    Err(e) => {
+                        return Some((Err(FoundryError::from(e)), (byte_stream, buffer)));
+                    }
+                }
+            }
+        },
+    )
+}
+
+/// Parse a single SSE line, returning None for lines that should be skipped.
+fn parse_sse_line(line: &str) -> Option<FoundryResult<ChatCompletionChunk>> {
+    let line = line.trim();
+
+    // Skip empty lines and comments
+    if line.is_empty() || line.starts_with(':') {
+        return None;
+    }
+
+    // Handle data lines
+    if let Some(data) = line.strip_prefix("data: ") {
+        let data = data.trim();
+
+        // Skip [DONE] marker
+        if data == "[DONE]" {
+            return None;
+        }
+
+        // Parse JSON
+        match serde_json::from_str::<ChatCompletionChunk>(data) {
+            Ok(chunk) => Some(Ok(chunk)),
+            Err(e) => Some(Err(FoundryError::Stream(format!(
+                "Failed to parse chunk: {}",
+                e
+            )))),
+        }
+    } else {
+        // Skip other SSE fields (event:, id:, retry:)
+        None
+    }
 }
 
 #[cfg(test)]
@@ -603,5 +841,285 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("429"));
+    }
+
+    // --- Streaming types tests ---
+
+    #[test]
+    fn chunk_deserialization() {
+        let json = serde_json::json!({
+            "id": "chatcmpl-chunk123",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "content": "Hello"
+                },
+                "finish_reason": null
+            }]
+        });
+
+        let chunk: ChatCompletionChunk = serde_json::from_value(json).unwrap();
+
+        assert_eq!(chunk.id, "chatcmpl-chunk123");
+        assert_eq!(chunk.object, "chat.completion.chunk");
+        assert_eq!(chunk.model, "gpt-4o");
+        assert_eq!(chunk.choices.len(), 1);
+        assert_eq!(chunk.choices[0].delta.role, Some(Role::Assistant));
+        assert_eq!(chunk.choices[0].delta.content, Some("Hello".into()));
+        assert!(chunk.choices[0].finish_reason.is_none());
+    }
+
+    #[test]
+    fn chunk_deserialization_content_only() {
+        let json = serde_json::json!({
+            "id": "chatcmpl-chunk123",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": " world"
+                },
+                "finish_reason": null
+            }]
+        });
+
+        let chunk: ChatCompletionChunk = serde_json::from_value(json).unwrap();
+
+        assert!(chunk.choices[0].delta.role.is_none());
+        assert_eq!(chunk.choices[0].delta.content, Some(" world".into()));
+    }
+
+    #[test]
+    fn chunk_deserialization_final_chunk() {
+        let json = serde_json::json!({
+            "id": "chatcmpl-chunk123",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop"
+            }]
+        });
+
+        let chunk: ChatCompletionChunk = serde_json::from_value(json).unwrap();
+
+        assert!(chunk.choices[0].delta.role.is_none());
+        assert!(chunk.choices[0].delta.content.is_none());
+        assert_eq!(chunk.choices[0].finish_reason, Some("stop".into()));
+    }
+
+    #[test]
+    fn parse_sse_line_data() {
+        let line = "data: {\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"created\":1234,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}";
+        let result = super::parse_sse_line(line);
+
+        assert!(result.is_some());
+        let chunk = result.unwrap().expect("should parse");
+        assert_eq!(chunk.id, "test");
+        assert_eq!(chunk.choices[0].delta.content, Some("Hi".into()));
+    }
+
+    #[test]
+    fn parse_sse_line_done() {
+        let line = "data: [DONE]";
+        let result = super::parse_sse_line(line);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_sse_line_empty() {
+        let result = super::parse_sse_line("");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_sse_line_comment() {
+        let result = super::parse_sse_line(": keep-alive");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn parse_sse_line_invalid_json() {
+        let line = "data: {invalid json}";
+        let result = super::parse_sse_line(line);
+
+        assert!(result.is_some());
+        let err = result.unwrap();
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("Failed to parse chunk"));
+    }
+
+    // --- Streaming integration tests ---
+
+    #[tokio::test]
+    async fn complete_stream_success() {
+        use futures::StreamExt;
+
+        let server = MockServer::start().await;
+
+        // SSE response with multiple chunks
+        let sse_body = concat!(
+            "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1700000000,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .and(header("Authorization", "Bearer test-api-key"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(sse_body)
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let stream = complete_stream(&client, &request).await.expect("should start stream");
+        let chunks: Vec<_> = stream.collect().await;
+
+        assert_eq!(chunks.len(), 3);
+
+        // First chunk has role
+        let first = chunks[0].as_ref().expect("chunk 1");
+        assert_eq!(first.choices[0].delta.role, Some(Role::Assistant));
+        assert_eq!(first.choices[0].delta.content, Some("Hello".into()));
+
+        // Second chunk has content only
+        let second = chunks[1].as_ref().expect("chunk 2");
+        assert!(second.choices[0].delta.role.is_none());
+        assert_eq!(second.choices[0].delta.content, Some(" world".into()));
+
+        // Third chunk has finish_reason
+        let third = chunks[2].as_ref().expect("chunk 3");
+        assert_eq!(third.choices[0].finish_reason, Some("stop".into()));
+    }
+
+    #[tokio::test]
+    async fn complete_stream_request_includes_stream_true() {
+        use futures::StreamExt;
+
+        let server = MockServer::start().await;
+
+        // Verify the request body includes stream: true
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .and(body_json(serde_json::json!({
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": true
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("data: [DONE]\n\n")
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hi"))
+            .build();
+
+        let stream = complete_stream(&client, &request).await.expect("should start");
+        let _: Vec<_> = stream.collect().await;
+    }
+
+    #[tokio::test]
+    async fn complete_stream_api_error() {
+        let server = MockServer::start().await;
+
+        let error_response = serde_json::json!({
+            "error": {
+                "code": "InvalidModel",
+                "message": "Model not found"
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(&error_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("nonexistent")
+            .message(Message::user("Hi"))
+            .build();
+
+        let result = complete_stream(&client, &request).await;
+
+        match result {
+            Ok(_) => panic!("Expected error, got Ok"),
+            Err(e) => assert!(e.to_string().contains("InvalidModel")),
+        }
+    }
+
+    #[tokio::test]
+    async fn complete_stream_collects_full_content() {
+        use futures::StreamExt;
+
+        let server = MockServer::start().await;
+
+        let sse_body = concat!(
+            "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"The \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"is 42.\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(sse_body)
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("What is the meaning of life?"))
+            .build();
+
+        let stream = complete_stream(&client, &request).await.expect("should start");
+
+        // Collect all content
+        let mut full_content = String::new();
+        let mut stream = std::pin::pin!(stream);
+        while let Some(chunk_result) = stream.next().await {
+            if let Ok(chunk) = chunk_result {
+                if let Some(content) = chunk.choices.first().and_then(|c| c.delta.content.as_ref()) {
+                    full_content.push_str(content);
+                }
+            }
+        }
+
+        assert_eq!(full_content, "The answer is 42.");
     }
 }

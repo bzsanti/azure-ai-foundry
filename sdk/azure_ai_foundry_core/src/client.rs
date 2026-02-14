@@ -182,6 +182,47 @@ impl FoundryClient {
         Self::check_response(response).await
     }
 
+    /// Send a POST request for streaming responses.
+    ///
+    /// Unlike [`Self::post`], this method does not consume the response body
+    /// for error checking. The caller is responsible for handling the stream.
+    /// Only checks the HTTP status code, not the body content.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The API path to request.
+    /// * `body` - The request body to serialize as JSON.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authentication fails, serialization fails,
+    /// the request fails, or the HTTP status code indicates an error.
+    pub async fn post_stream<T: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &T,
+    ) -> FoundryResult<reqwest::Response> {
+        let url = self.url(path)?;
+        let auth = self.credential.resolve().await?;
+
+        let response = self
+            .http
+            .post(url)
+            .header("Authorization", &auth)
+            .header("api-version", &self.api_version)
+            .json(body)
+            .send()
+            .await?;
+
+        // For streaming, only check status code, don't consume body
+        if response.status().is_success() {
+            Ok(response)
+        } else {
+            // For errors, consume body to get error message
+            Self::check_response(response).await
+        }
+    }
+
     /// Check the response status and return an error if not successful.
     async fn check_response(response: reqwest::Response) -> FoundryResult<reqwest::Response> {
         if response.status().is_success() {
