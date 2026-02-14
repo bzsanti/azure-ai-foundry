@@ -594,7 +594,10 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, azure_ai_foundry_core::error::FoundryError::Builder(_)));
+        assert!(matches!(
+            err,
+            azure_ai_foundry_core::error::FoundryError::Builder(_)
+        ));
         assert!(err.to_string().contains("model"));
     }
 
@@ -630,7 +633,10 @@ mod tests {
     fn message_assistant_constructor() {
         let msg = Message::assistant("Rust is a systems programming language.");
         assert_eq!(msg.role, Role::Assistant);
-        assert_eq!(msg.content, Some("Rust is a systems programming language.".into()));
+        assert_eq!(
+            msg.content,
+            Some("Rust is a systems programming language.".into())
+        );
     }
 
     // --- Serialization tests ---
@@ -639,16 +645,31 @@ mod tests {
     fn role_serialization() {
         assert_eq!(serde_json::to_string(&Role::System).unwrap(), "\"system\"");
         assert_eq!(serde_json::to_string(&Role::User).unwrap(), "\"user\"");
-        assert_eq!(serde_json::to_string(&Role::Assistant).unwrap(), "\"assistant\"");
+        assert_eq!(
+            serde_json::to_string(&Role::Assistant).unwrap(),
+            "\"assistant\""
+        );
         assert_eq!(serde_json::to_string(&Role::Tool).unwrap(), "\"tool\"");
     }
 
     #[test]
     fn role_deserialization() {
-        assert_eq!(serde_json::from_str::<Role>("\"system\"").unwrap(), Role::System);
-        assert_eq!(serde_json::from_str::<Role>("\"user\"").unwrap(), Role::User);
-        assert_eq!(serde_json::from_str::<Role>("\"assistant\"").unwrap(), Role::Assistant);
-        assert_eq!(serde_json::from_str::<Role>("\"tool\"").unwrap(), Role::Tool);
+        assert_eq!(
+            serde_json::from_str::<Role>("\"system\"").unwrap(),
+            Role::System
+        );
+        assert_eq!(
+            serde_json::from_str::<Role>("\"user\"").unwrap(),
+            Role::User
+        );
+        assert_eq!(
+            serde_json::from_str::<Role>("\"assistant\"").unwrap(),
+            Role::Assistant
+        );
+        assert_eq!(
+            serde_json::from_str::<Role>("\"tool\"").unwrap(),
+            Role::Tool
+        );
     }
 
     #[test]
@@ -1025,7 +1046,10 @@ mod tests {
         assert!(result.is_some());
         let err = result.unwrap();
         assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("Failed to parse chunk"));
+        assert!(err
+            .unwrap_err()
+            .to_string()
+            .contains("Failed to parse chunk"));
     }
 
     // --- Streaming integration tests ---
@@ -1062,7 +1086,9 @@ mod tests {
             .message(Message::user("Hello"))
             .build();
 
-        let stream = complete_stream(&client, &request).await.expect("should start stream");
+        let stream = complete_stream(&client, &request)
+            .await
+            .expect("should start stream");
         let chunks: Vec<_> = stream.collect().await;
 
         assert_eq!(chunks.len(), 3);
@@ -1111,7 +1137,9 @@ mod tests {
             .message(Message::user("Hi"))
             .build();
 
-        let stream = complete_stream(&client, &request).await.expect("should start");
+        let stream = complete_stream(&client, &request)
+            .await
+            .expect("should start");
         let _: Vec<_> = stream.collect().await;
     }
 
@@ -1178,14 +1206,17 @@ mod tests {
             .message(Message::user("What is the meaning of life?"))
             .build();
 
-        let stream = complete_stream(&client, &request).await.expect("should start");
+        let stream = complete_stream(&client, &request)
+            .await
+            .expect("should start");
 
         // Collect all content
         let mut full_content = String::new();
         let mut stream = std::pin::pin!(stream);
         while let Some(chunk_result) = stream.next().await {
             if let Ok(chunk) = chunk_result {
-                if let Some(content) = chunk.choices.first().and_then(|c| c.delta.content.as_ref()) {
+                if let Some(content) = chunk.choices.first().and_then(|c| c.delta.content.as_ref())
+                {
                     full_content.push_str(content);
                 }
             }

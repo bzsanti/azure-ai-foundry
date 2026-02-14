@@ -573,8 +573,14 @@ mod tests {
 
     #[test]
     fn test_encoding_format_serialization() {
-        assert_eq!(serde_json::to_string(&EncodingFormat::Float).unwrap(), "\"float\"");
-        assert_eq!(serde_json::to_string(&EncodingFormat::Base64).unwrap(), "\"base64\"");
+        assert_eq!(
+            serde_json::to_string(&EncodingFormat::Float).unwrap(),
+            "\"float\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EncodingFormat::Base64).unwrap(),
+            "\"base64\""
+        );
     }
 
     // --- Ciclo 13: EmbeddingInput single serialization ---
@@ -600,9 +606,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "model is required")]
     fn test_builder_without_model_panics() {
-        EmbeddingRequest::builder()
-            .input("Hello")
-            .build();
+        EmbeddingRequest::builder().input("Hello").build();
     }
 
     // --- Ciclo 16: Builder panic when input missing ---
@@ -619,13 +623,14 @@ mod tests {
 
     #[test]
     fn test_try_build_returns_error_when_model_missing() {
-        let result = EmbeddingRequest::builder()
-            .input("Hello")
-            .try_build();
+        let result = EmbeddingRequest::builder().input("Hello").try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, azure_ai_foundry_core::error::FoundryError::Builder(_)));
+        assert!(matches!(
+            err,
+            azure_ai_foundry_core::error::FoundryError::Builder(_)
+        ));
         assert!(err.to_string().contains("model"));
     }
 
@@ -637,7 +642,10 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, azure_ai_foundry_core::error::FoundryError::Builder(_)));
+        assert!(matches!(
+            err,
+            azure_ai_foundry_core::error::FoundryError::Builder(_)
+        ));
         assert!(err.to_string().contains("input"));
     }
 

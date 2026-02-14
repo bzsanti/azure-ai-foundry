@@ -412,7 +412,10 @@ mod tests {
         // Save original value
         let original = std::env::var("AZURE_AI_FOUNDRY_ENDPOINT").ok();
 
-        std::env::set_var("AZURE_AI_FOUNDRY_ENDPOINT", "https://env.services.ai.azure.com");
+        std::env::set_var(
+            "AZURE_AI_FOUNDRY_ENDPOINT",
+            "https://env.services.ai.azure.com",
+        );
 
         let client = FoundryClient::builder()
             .credential(FoundryCredential::api_key("test"))
@@ -437,7 +440,10 @@ mod tests {
         // Save original value
         let original = std::env::var("AZURE_AI_FOUNDRY_ENDPOINT").ok();
 
-        std::env::set_var("AZURE_AI_FOUNDRY_ENDPOINT", "https://env.services.ai.azure.com");
+        std::env::set_var(
+            "AZURE_AI_FOUNDRY_ENDPOINT",
+            "https://env.services.ai.azure.com",
+        );
 
         let client = FoundryClient::builder()
             .endpoint("https://explicit.services.ai.azure.com")
@@ -465,7 +471,10 @@ mod tests {
             .build();
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FoundryError::InvalidEndpoint(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            FoundryError::InvalidEndpoint(_)
+        ));
     }
 
     #[test]
@@ -692,7 +701,9 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/test/endpoint"))
-            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"created": true})))
+            .respond_with(
+                ResponseTemplate::new(201).set_body_json(serde_json::json!({"created": true})),
+            )
             .mount(&server)
             .await;
 

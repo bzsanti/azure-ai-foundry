@@ -69,7 +69,10 @@ mod tests {
     #[test]
     fn auth_error_display() {
         let err = FoundryError::Auth("Invalid credentials".into());
-        assert_eq!(err.to_string(), "Authentication failed: Invalid credentials");
+        assert_eq!(
+            err.to_string(),
+            "Authentication failed: Invalid credentials"
+        );
     }
 
     #[test]
@@ -90,7 +93,10 @@ mod tests {
             code: "InvalidRequest".into(),
             message: "Bad request body".into(),
         };
-        assert_eq!(err.to_string(), "API error (InvalidRequest): Bad request body");
+        assert_eq!(
+            err.to_string(),
+            "API error (InvalidRequest): Bad request body"
+        );
     }
 
     #[test]
@@ -118,8 +124,8 @@ mod tests {
 
     #[test]
     fn from_serde_json_error() {
-        let json_err = serde_json::from_str::<serde_json::Value>("invalid json")
-            .expect_err("should fail");
+        let json_err =
+            serde_json::from_str::<serde_json::Value>("invalid json").expect_err("should fail");
         let foundry_err: FoundryError = json_err.into();
         assert!(matches!(foundry_err, FoundryError::Serialization(_)));
     }
