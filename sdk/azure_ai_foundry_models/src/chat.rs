@@ -34,6 +34,17 @@ use futures::stream::{self, Stream};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Maximum size of the SSE line buffer in bytes (1MB).
+///
+/// This limit prevents denial-of-service attacks where a malicious server
+/// could send an extremely long line without newlines, causing unbounded
+/// memory consumption.
+pub const SSE_BUFFER_LIMIT: usize = 1_048_576;
+
+// ---------------------------------------------------------------------------
 // Request types
 // ---------------------------------------------------------------------------
 
@@ -139,11 +150,48 @@ impl ChatCompletionRequestBuilder {
         self
     }
 
-    /// Build the request, returning an error if required fields are missing.
+    /// Build the request, returning an error if required fields are missing
+    /// or parameter values are out of range.
     pub fn try_build(self) -> FoundryResult<ChatCompletionRequest> {
         let model = self
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
+
+        // Validate temperature (0.0 - 2.0)
+        if let Some(temp) = self.temperature {
+            if !(0.0..=2.0).contains(&temp) {
+                return Err(FoundryError::Builder(
+                    "temperature must be between 0.0 and 2.0".into(),
+                ));
+            }
+        }
+
+        // Validate top_p (0.0 - 1.0)
+        if let Some(top_p) = self.top_p {
+            if !(0.0..=1.0).contains(&top_p) {
+                return Err(FoundryError::Builder(
+                    "top_p must be between 0.0 and 1.0".into(),
+                ));
+            }
+        }
+
+        // Validate presence_penalty (-2.0 - 2.0)
+        if let Some(penalty) = self.presence_penalty {
+            if !(-2.0..=2.0).contains(&penalty) {
+                return Err(FoundryError::Builder(
+                    "presence_penalty must be between -2.0 and 2.0".into(),
+                ));
+            }
+        }
+
+        // Validate frequency_penalty (-2.0 - 2.0)
+        if let Some(penalty) = self.frequency_penalty {
+            if !(-2.0..=2.0).contains(&penalty) {
+                return Err(FoundryError::Builder(
+                    "frequency_penalty must be between -2.0 and 2.0".into(),
+                ));
+            }
+        }
 
         Ok(ChatCompletionRequest {
             model,
@@ -312,6 +360,35 @@ pub struct Delta {
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Error Handling
+///
+/// ```rust,no_run
+/// # use azure_ai_foundry_core::client::FoundryClient;
+/// # use azure_ai_foundry_core::error::FoundryError;
+/// # use azure_ai_foundry_models::chat::*;
+/// # async fn example(client: &FoundryClient) {
+/// let request = ChatCompletionRequest::builder()
+///     .model("gpt-4o")
+///     .message(Message::user("Hello"))
+///     .build();
+///
+/// match complete(client, &request).await {
+///     Ok(response) => {
+///         if let Some(content) = &response.choices[0].message.content {
+///             println!("{}", content);
+///         }
+///     }
+///     Err(FoundryError::Api { code, message, .. }) => {
+///         eprintln!("API error {}: {}", code, message);
+///     }
+///     Err(FoundryError::Request { .. }) => {
+///         eprintln!("Network error - please check your connection");
+///     }
+///     Err(e) => eprintln!("Unexpected error: {}", e),
+/// }
+/// # }
+/// ```
 pub async fn complete(
     client: &FoundryClient,
     request: &ChatCompletionRequest,
@@ -348,6 +425,45 @@ pub async fn complete(
 ///     }
 /// }
 /// # Ok(())
+/// # }
+/// ```
+///
+/// # Error Handling in Streams
+///
+/// Errors can occur during stream processing. Handle them gracefully:
+///
+/// ```rust,no_run
+/// # use azure_ai_foundry_core::client::FoundryClient;
+/// # use azure_ai_foundry_models::chat::*;
+/// # use futures::StreamExt;
+/// # async fn example(client: &FoundryClient) {
+/// let request = ChatCompletionRequest::builder()
+///     .model("gpt-4o")
+///     .message(Message::user("Tell me a story"))
+///     .build();
+///
+/// match complete_stream(client, &request).await {
+///     Ok(stream) => {
+///         let mut stream = std::pin::pin!(stream);
+///         while let Some(chunk_result) = stream.next().await {
+///             match chunk_result {
+///                 Ok(chunk) => {
+///                     // Process chunk content
+///                     if let Some(content) = chunk.choices.first()
+///                         .and_then(|c| c.delta.content.as_ref())
+///                     {
+///                         print!("{}", content);
+///                     }
+///                 }
+///                 Err(e) => {
+///                     eprintln!("\nStream error: {}", e);
+///                     break; // Stop processing on error
+///                 }
+///             }
+///         }
+///     }
+///     Err(e) => eprintln!("Failed to start stream: {}", e),
+/// }
 /// # }
 /// ```
 pub async fn complete_stream(
@@ -416,6 +532,9 @@ struct StreamingRequest<'a> {
 /// - Uses `memchr` for fast newline detection
 /// - Works with `Vec<u8>` to minimize UTF-8 validation overhead
 /// - Minimizes allocations by draining processed bytes
+///
+/// Security:
+/// - Enforces [`SSE_BUFFER_LIMIT`] to prevent DoS via unbounded memory consumption
 fn parse_sse_stream(
     response: reqwest::Response,
 ) -> impl Stream<Item = FoundryResult<ChatCompletionChunk>> {
@@ -428,6 +547,18 @@ fn parse_sse_stream(
             use futures::TryStreamExt;
 
             loop {
+                // Security: Check buffer size BEFORE processing to prevent DoS
+                if buffer.len() > SSE_BUFFER_LIMIT {
+                    buffer.clear(); // Prevent memory leak
+                    return Some((
+                        Err(FoundryError::stream(format!(
+                            "SSE buffer limit exceeded ({}MB). Possible malformed stream.",
+                            SSE_BUFFER_LIMIT / 1_048_576
+                        ))),
+                        (byte_stream, buffer),
+                    ));
+                }
+
                 // Fast newline search using memchr
                 if let Some(newline_pos) = memchr::memchr(b'\n', &buffer) {
                     // Extract line bytes and drain from buffer
@@ -498,10 +629,7 @@ fn parse_sse_line(line: &str) -> Option<FoundryResult<ChatCompletionChunk>> {
         // Parse JSON
         match serde_json::from_str::<ChatCompletionChunk>(data) {
             Ok(chunk) => Some(Ok(chunk)),
-            Err(e) => Some(Err(FoundryError::Stream(format!(
-                "Failed to parse chunk: {}",
-                e
-            )))),
+            Err(e) => Some(Err(FoundryError::stream_with_source("failed to parse chunk", e))),
         }
     } else {
         // Skip other SSE fields (event:, id:, retry:)
@@ -611,6 +739,152 @@ mod tests {
         assert!(result.is_ok());
         let request = result.unwrap();
         assert_eq!(request.model, "gpt-4o");
+    }
+
+    // --- Builder validation tests (parameter ranges) ---
+
+    #[test]
+    fn test_builder_rejects_invalid_temperature() {
+        // Temperature must be between 0.0 and 2.0
+        let result = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .temperature(3.0) // Invalid: > 2.0
+            .try_build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            azure_ai_foundry_core::error::FoundryError::Builder(_)
+        ));
+        assert!(
+            err.to_string().contains("temperature"),
+            "Error should mention temperature: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_builder_rejects_negative_temperature() {
+        // Temperature must be between 0.0 and 2.0
+        let result = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .temperature(-0.5) // Invalid: < 0.0
+            .try_build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            azure_ai_foundry_core::error::FoundryError::Builder(_)
+        ));
+    }
+
+    #[test]
+    fn test_builder_rejects_invalid_top_p() {
+        // top_p must be between 0.0 and 1.0
+        let result = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .top_p(1.5) // Invalid: > 1.0
+            .try_build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            azure_ai_foundry_core::error::FoundryError::Builder(_)
+        ));
+        assert!(
+            err.to_string().contains("top_p"),
+            "Error should mention top_p: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_builder_rejects_negative_top_p() {
+        let result = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .top_p(-0.1) // Invalid: < 0.0
+            .try_build();
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_builder_rejects_invalid_presence_penalty() {
+        // presence_penalty must be between -2.0 and 2.0
+        let result = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .presence_penalty(-3.0) // Invalid: < -2.0
+            .try_build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            azure_ai_foundry_core::error::FoundryError::Builder(_)
+        ));
+        assert!(
+            err.to_string().contains("presence_penalty"),
+            "Error should mention presence_penalty: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_builder_rejects_invalid_frequency_penalty() {
+        // frequency_penalty must be between -2.0 and 2.0
+        let result = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .frequency_penalty(5.0) // Invalid: > 2.0
+            .try_build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            azure_ai_foundry_core::error::FoundryError::Builder(_)
+        ));
+        assert!(
+            err.to_string().contains("frequency_penalty"),
+            "Error should mention frequency_penalty: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_builder_accepts_valid_parameters() {
+        // All parameters within valid ranges
+        let result = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .temperature(0.7)
+            .top_p(0.9)
+            .presence_penalty(0.5)
+            .frequency_penalty(-0.3)
+            .try_build();
+
+        assert!(result.is_ok(), "Valid parameters should not produce error");
+        let request = result.unwrap();
+        assert_eq!(request.temperature, Some(0.7));
+        assert_eq!(request.top_p, Some(0.9));
+        assert_eq!(request.presence_penalty, Some(0.5));
+        assert_eq!(request.frequency_penalty, Some(-0.3));
+    }
+
+    #[test]
+    fn test_builder_accepts_boundary_values() {
+        // Edge cases: exact boundary values
+        let result = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .temperature(0.0)
+            .top_p(1.0)
+            .presence_penalty(-2.0)
+            .frequency_penalty(2.0)
+            .try_build();
+
+        assert!(result.is_ok(), "Boundary values should be valid");
     }
 
     // --- Message constructor tests ---
@@ -927,7 +1201,7 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            FoundryError::Http { status, message } => {
+            FoundryError::Http { status, message, .. } => {
                 assert_eq!(status, 429);
                 assert!(message.contains("Rate limit"));
             }
@@ -1049,7 +1323,7 @@ mod tests {
         assert!(err
             .unwrap_err()
             .to_string()
-            .contains("Failed to parse chunk"));
+            .contains("failed to parse chunk"));
     }
 
     // --- Streaming integration tests ---
@@ -1223,5 +1497,159 @@ mod tests {
         }
 
         assert_eq!(full_content, "The answer is 42.");
+    }
+
+    // --- SSE Buffer Limit Tests (Mejora 1: Security) ---
+
+    #[tokio::test]
+    async fn test_sse_buffer_limit_prevents_dos() {
+        use futures::StreamExt;
+
+        let server = MockServer::start().await;
+
+        // Create a malicious SSE response: 2MB of data without any newlines
+        // This should trigger the buffer limit protection
+        let oversized_line = "a".repeat(2 * 1024 * 1024); // 2MB without newline
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(&oversized_line)
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let stream = complete_stream(&client, &request)
+            .await
+            .expect("should start stream");
+
+        // Consume the stream - should get an error about buffer limit
+        let chunks: Vec<_> = stream.collect().await;
+
+        // The stream should have produced at least one error
+        assert!(
+            chunks.iter().any(|r| r.is_err()),
+            "Expected buffer limit error, but stream completed without errors"
+        );
+
+        // Check that the error message mentions buffer limit
+        let err = chunks.into_iter().find(|r| r.is_err()).unwrap().unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("buffer")
+                || err.to_string().to_lowercase().contains("limit"),
+            "Expected buffer limit error, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sse_buffer_limit_allows_normal_streams() {
+        use futures::StreamExt;
+
+        let server = MockServer::start().await;
+
+        // Create a normal SSE response with multiple medium-sized lines (500KB total)
+        // Each line is ~500 bytes, which is well under the 1MB limit
+        let mut sse_body = String::new();
+        for i in 0..100 {
+            let content = format!("chunk{}", i);
+            let chunk = format!(
+                "data: {{\"id\":\"test\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"{}\"}},\"finish_reason\":null}}]}}\n\n",
+                content
+            );
+            sse_body.push_str(&chunk);
+        }
+        sse_body.push_str("data: [DONE]\n\n");
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(&sse_body)
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let stream = complete_stream(&client, &request)
+            .await
+            .expect("should start stream");
+
+        let chunks: Vec<_> = stream.collect().await;
+
+        // All chunks should be successful
+        assert!(
+            chunks.iter().all(|r| r.is_ok()),
+            "Expected all chunks to be successful, but got errors"
+        );
+
+        // We should have 100 chunks
+        assert_eq!(chunks.len(), 100);
+    }
+
+    #[tokio::test]
+    async fn test_sse_buffer_allows_many_short_lines() {
+        use futures::StreamExt;
+
+        let server = MockServer::start().await;
+
+        // Create 1000 very short lines (well under any buffer limit)
+        let mut sse_body = String::new();
+        for i in 0..1000 {
+            let chunk = format!(
+                "data: {{\"id\":\"{}\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"x\"}},\"finish_reason\":null}}]}}\n\n",
+                i
+            );
+            sse_body.push_str(&chunk);
+        }
+        sse_body.push_str("data: [DONE]\n\n");
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(&sse_body)
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let stream = complete_stream(&client, &request)
+            .await
+            .expect("should start stream");
+
+        let chunks: Vec<_> = stream.collect().await;
+
+        // All chunks should be successful (buffer drains between lines)
+        assert!(
+            chunks.iter().all(|r| r.is_ok()),
+            "Expected all chunks to be successful"
+        );
+
+        // We should have 1000 chunks
+        assert_eq!(chunks.len(), 1000);
     }
 }

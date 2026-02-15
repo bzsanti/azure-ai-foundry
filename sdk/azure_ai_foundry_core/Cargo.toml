@@ -20,9 +20,11 @@ tracing.workspace = true
 url.workspace = true
 secrecy.workspace = true
 tokio.workspace = true
+fastrand.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock.workspace = true
 async-trait = "0.1"
 serial_test = "3.2"
+futures.workspace = true
