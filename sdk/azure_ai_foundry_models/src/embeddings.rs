@@ -528,7 +528,9 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            FoundryError::Http { status, message, .. } => {
+            FoundryError::Http {
+                status, message, ..
+            } => {
                 assert_eq!(status, 429);
                 assert!(message.contains("Rate limit"));
             }

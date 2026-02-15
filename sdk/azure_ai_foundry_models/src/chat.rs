@@ -629,7 +629,10 @@ fn parse_sse_line(line: &str) -> Option<FoundryResult<ChatCompletionChunk>> {
         // Parse JSON
         match serde_json::from_str::<ChatCompletionChunk>(data) {
             Ok(chunk) => Some(Ok(chunk)),
-            Err(e) => Some(Err(FoundryError::stream_with_source("failed to parse chunk", e))),
+            Err(e) => Some(Err(FoundryError::stream_with_source(
+                "failed to parse chunk",
+                e,
+            ))),
         }
     } else {
         // Skip other SSE fields (event:, id:, retry:)
@@ -1201,7 +1204,9 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            FoundryError::Http { status, message, .. } => {
+            FoundryError::Http {
+                status, message, ..
+            } => {
                 assert_eq!(status, 429);
                 assert!(message.contains("Rate limit"));
             }
@@ -1542,7 +1547,11 @@ mod tests {
         );
 
         // Check that the error message mentions buffer limit
-        let err = chunks.into_iter().find(|r| r.is_err()).unwrap().unwrap_err();
+        let err = chunks
+            .into_iter()
+            .find(|r| r.is_err())
+            .unwrap()
+            .unwrap_err();
         assert!(
             err.to_string().to_lowercase().contains("buffer")
                 || err.to_string().to_lowercase().contains("limit"),

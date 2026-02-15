@@ -427,7 +427,10 @@ impl FoundryClient {
         let sanitized = Self::sanitize_error_message(msg);
 
         if sanitized.len() > Self::MAX_ERROR_MESSAGE_LEN {
-            format!("{}... (truncated)", &sanitized[..Self::MAX_ERROR_MESSAGE_LEN])
+            format!(
+                "{}... (truncated)",
+                &sanitized[..Self::MAX_ERROR_MESSAGE_LEN]
+            )
         } else {
             sanitized
         }
@@ -584,8 +587,8 @@ impl FoundryClientBuilder {
                 )
             })?;
 
-        let endpoint =
-            Url::parse(&endpoint_str).map_err(|e| FoundryError::invalid_endpoint_with_source("invalid endpoint URL", e))?;
+        let endpoint = Url::parse(&endpoint_str)
+            .map_err(|e| FoundryError::invalid_endpoint_with_source("invalid endpoint URL", e))?;
 
         let credential = self
             .credential
@@ -828,7 +831,9 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         match err {
-            FoundryError::Http { status, message, .. } => {
+            FoundryError::Http {
+                status, message, ..
+            } => {
                 assert_eq!(status, 401);
                 assert_eq!(message, "Unauthorized");
             }
@@ -1003,7 +1008,9 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         match err {
-            FoundryError::Http { status, message, .. } => {
+            FoundryError::Http {
+                status, message, ..
+            } => {
                 assert_eq!(status, 503);
                 assert_eq!(message, "Service Unavailable");
             }
@@ -1153,8 +1160,8 @@ mod tests {
             .endpoint("https://test.services.ai.azure.com")
             .credential(FoundryCredential::api_key("test"))
             .http_client(custom_client)
-            .connect_timeout(Duration::from_secs(99))  // Should be ignored
-            .read_timeout(Duration::from_secs(99))     // Should be ignored
+            .connect_timeout(Duration::from_secs(99)) // Should be ignored
+            .read_timeout(Duration::from_secs(99)) // Should be ignored
             .build()
             .expect("should build");
 
@@ -1260,7 +1267,10 @@ mod tests {
 
         // Verify retry policy is configured
         assert_eq!(client.retry_policy().max_retries, 5);
-        assert_eq!(client.retry_policy().initial_backoff, Duration::from_millis(200));
+        assert_eq!(
+            client.retry_policy().initial_backoff,
+            Duration::from_millis(200)
+        );
     }
 
     #[test]
@@ -1273,7 +1283,10 @@ mod tests {
 
         // Default policy: 3 retries, 500ms initial backoff
         assert_eq!(client.retry_policy().max_retries, 3);
-        assert_eq!(client.retry_policy().initial_backoff, Duration::from_millis(500));
+        assert_eq!(
+            client.retry_policy().initial_backoff,
+            Duration::from_millis(500)
+        );
     }
 
     #[tokio::test]
@@ -1318,7 +1331,11 @@ mod tests {
         let elapsed = start.elapsed();
 
         // Should succeed after retries
-        assert!(result.is_ok(), "Expected success after retries, got {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Expected success after retries, got {:?}",
+            result
+        );
 
         // Should have made 3 requests (initial + 2 retries)
         assert_eq!(
@@ -1385,7 +1402,11 @@ mod tests {
         let result = client.post("/rate-limited", &body).await;
 
         // Should succeed after retry
-        assert!(result.is_ok(), "Expected success after retry, got {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Expected success after retry, got {:?}",
+            result
+        );
 
         // Should have made 2 requests (initial 429 + retry success)
         assert_eq!(
@@ -1446,7 +1467,11 @@ mod tests {
         let result = client.post_stream("/stream-retry", &body).await;
 
         // Should succeed after retry
-        assert!(result.is_ok(), "Expected success after retry, got {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Expected success after retry, got {:?}",
+            result
+        );
 
         // Should have made 2 requests (initial 503 + retry success)
         assert_eq!(
@@ -1634,7 +1659,10 @@ mod tests {
         let result = FoundryClient::sanitize_error_message(msg);
 
         assert!(!result.contains("abc123"), "First token should be redacted");
-        assert!(!result.contains("xyz789"), "Second token should be redacted");
+        assert!(
+            !result.contains("xyz789"),
+            "Second token should be redacted"
+        );
         assert_eq!(
             result.matches("[REDACTED]").count(),
             2,

@@ -125,8 +125,9 @@ impl FoundryCredential {
     ///
     /// Returns an error if credential creation fails.
     pub fn developer_tools() -> FoundryResult<Self> {
-        let credential = azure_identity::DeveloperToolsCredential::new(None)
-            .map_err(|e| FoundryError::auth_with_source("failed to create developer tools credential", e))?;
+        let credential = azure_identity::DeveloperToolsCredential::new(None).map_err(|e| {
+            FoundryError::auth_with_source("failed to create developer tools credential", e)
+        })?;
         Ok(Self::TokenCredential {
             credential,
             cache: Arc::new(Mutex::new(None)),
@@ -141,8 +142,9 @@ impl FoundryCredential {
     ///
     /// Returns an error if credential creation fails.
     pub fn azure_cli() -> FoundryResult<Self> {
-        let credential = azure_identity::AzureCliCredential::new(None)
-            .map_err(|e| FoundryError::auth_with_source("failed to create Azure CLI credential", e))?;
+        let credential = azure_identity::AzureCliCredential::new(None).map_err(|e| {
+            FoundryError::auth_with_source("failed to create Azure CLI credential", e)
+        })?;
         Ok(Self::TokenCredential {
             credential,
             cache: Arc::new(Mutex::new(None)),
@@ -157,8 +159,9 @@ impl FoundryCredential {
     ///
     /// Returns an error if credential creation fails.
     pub fn managed_identity() -> FoundryResult<Self> {
-        let credential = azure_identity::ManagedIdentityCredential::new(None)
-            .map_err(|e| FoundryError::auth_with_source("failed to create managed identity credential", e))?;
+        let credential = azure_identity::ManagedIdentityCredential::new(None).map_err(|e| {
+            FoundryError::auth_with_source("failed to create managed identity credential", e)
+        })?;
         Ok(Self::TokenCredential {
             credential,
             cache: Arc::new(Mutex::new(None)),
@@ -341,7 +344,11 @@ mod tests {
             })
         }
 
-        fn new_with_delay(token: impl Into<String>, expires_in_secs: u64, delay_ms: u64) -> Arc<Self> {
+        fn new_with_delay(
+            token: impl Into<String>,
+            expires_in_secs: u64,
+            delay_ms: u64,
+        ) -> Arc<Self> {
             Arc::new(Self {
                 token: token.into(),
                 call_count: AtomicU32::new(0),
@@ -768,11 +775,8 @@ mod tests {
         }
 
         // All tasks should complete without deadlock (timeout would indicate deadlock)
-        let timeout_result = tokio::time::timeout(
-            Duration::from_secs(10),
-            futures::future::join_all(handles),
-        )
-        .await;
+        let timeout_result =
+            tokio::time::timeout(Duration::from_secs(10), futures::future::join_all(handles)).await;
 
         assert!(
             timeout_result.is_ok(),

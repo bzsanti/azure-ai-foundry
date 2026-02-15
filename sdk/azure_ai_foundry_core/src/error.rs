@@ -120,7 +120,10 @@ impl FoundryError {
     }
 
     /// Creates an invalid endpoint error with the underlying parse error.
-    pub fn invalid_endpoint_with_source(message: impl Into<String>, source: url::ParseError) -> Self {
+    pub fn invalid_endpoint_with_source(
+        message: impl Into<String>,
+        source: url::ParseError,
+    ) -> Self {
         Self::InvalidEndpoint {
             message: message.into(),
             source: Some(source),
@@ -308,7 +311,10 @@ mod tests {
         let foundry_err = FoundryError::invalid_endpoint_with_source("bad URL format", parse_err);
 
         // Verify display message
-        assert_eq!(foundry_err.to_string(), "Invalid endpoint URL: bad URL format");
+        assert_eq!(
+            foundry_err.to_string(),
+            "Invalid endpoint URL: bad URL format"
+        );
 
         // Verify source chain is preserved
         let source = foundry_err.source().expect("should have source");
@@ -327,7 +333,10 @@ mod tests {
         let foundry_err = FoundryError::stream_with_source("failed to parse SSE event", json_err);
 
         // Verify display message
-        assert_eq!(foundry_err.to_string(), "Stream error: failed to parse SSE event");
+        assert_eq!(
+            foundry_err.to_string(),
+            "Stream error: failed to parse SSE event"
+        );
 
         // Verify source chain is preserved
         let source = foundry_err.source().expect("should have source");
@@ -340,7 +349,10 @@ mod tests {
     fn error_display_backward_compatible() {
         // Auth error format unchanged
         let auth = FoundryError::auth("Invalid credentials");
-        assert_eq!(auth.to_string(), "Authentication failed: Invalid credentials");
+        assert_eq!(
+            auth.to_string(),
+            "Authentication failed: Invalid credentials"
+        );
 
         // HTTP error format unchanged
         let http = FoundryError::http(404, "Not found");
@@ -359,11 +371,17 @@ mod tests {
             code: "InvalidRequest".into(),
             message: "Bad request body".into(),
         };
-        assert_eq!(api.to_string(), "API error (InvalidRequest): Bad request body");
+        assert_eq!(
+            api.to_string(),
+            "API error (InvalidRequest): Bad request body"
+        );
 
         // MissingConfig format unchanged (not modified)
         let config = FoundryError::MissingConfig("endpoint required".into());
-        assert_eq!(config.to_string(), "Missing configuration: endpoint required");
+        assert_eq!(
+            config.to_string(),
+            "Missing configuration: endpoint required"
+        );
 
         // Builder format unchanged (not modified)
         let builder = FoundryError::Builder("model is required".into());
