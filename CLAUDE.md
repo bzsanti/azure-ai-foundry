@@ -129,11 +129,13 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-02-14)
+## Session Status (2026-02-15)
 
-**Branch:** `feat/real-auth`
+**Branch:** `docs/session-update`
 
-**v0.1.0 Status:** Ready for Release
+**v0.1.0 Status:** RELEASED
+
+**Release Tag:** `v0.1.0` pushed to GitHub, release workflow triggered.
 
 **Completed Features:**
 - Real authentication with `azure_identity` (`Arc<dyn TokenCredential>`)
@@ -142,7 +144,7 @@ When implementing:
 - SSE parsing optimized with `memchr`
 - Embeddings API (`embed()` function with builder pattern)
 
-**Quality Improvements (9 phases):**
+**Quality Improvements v0.1.0 (9 phases):**
 1. Test isolation with `serial_test` crate
 2. Builder pattern with `try_build()` returning `Result`
 3. SSE performance optimized (memchr, Vec<u8> buffer)
@@ -153,6 +155,34 @@ When implementing:
 8. Error tests with pattern matching
 9. Test constants centralization
 
+**Quality Improvements v0.2.0 (TDD Plan execution):**
+
+Phase 1 - Security:
+1. SSE Buffer Limit: DoS prevention with 1MB buffer limit
+2. Error Sanitization: Automatic redaction of Bearer tokens and API keys
+
+Phase 2 - Robustness:
+3. Streaming Timeouts: 5-minute default timeout for streaming responses
+4. Token Race Condition: Already implemented in v0.1.0 (verified)
+5. Builder Validations: Range validation for temperature, top_p, penalties, dimensions
+6. Streaming Retry Logic: Pre-stream retry with exponential backoff
+
+Phase 3 - Optional:
+7. Clone Optimization: ❌ Discarded (negligible impact, clone is required)
+8. Doc Examples: ✓ Error handling examples for complete() and complete_stream()
+9. Tracing Instrumentation: ⏳ Deferred to v0.3.0 (will be implemented with Agent Service)
+10. High Concurrency Tests: ✓ Tests with 100+ concurrent tasks for thread-safety
+
+**Release Infrastructure:**
+- GitHub Actions release workflow (`.github/workflows/release.yml`)
+- CHANGELOG.md following Keep a Changelog format
+- Automatic crates.io publishing on tag push
+
+**Documentation:**
+- README.md for `azure_ai_foundry_core` crate
+- README.md for `azure_ai_foundry_models` crate
+- Doc examples with error handling patterns
+
 **Test Summary:**
-- 97 tests passing (45 core + 52 models + 14 doc-tests)
+- 160 tests passing (79 core + 65 models + 16 doc-tests)
 - All clippy checks passing (0 warnings)

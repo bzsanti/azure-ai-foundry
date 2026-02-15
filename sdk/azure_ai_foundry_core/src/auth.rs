@@ -40,6 +40,12 @@ use crate::error::{FoundryError, FoundryResult};
 use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
 use secrecy::{ExposeSecret, SecretString};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
+
+/// Buffer time before token expiration to trigger proactive refresh.
+/// Tokens will be refreshed when they have less than this duration remaining.
+pub const TOKEN_EXPIRY_BUFFER: Duration = Duration::from_secs(60);
 
 /// The scope required for Azure AI Foundry / Cognitive Services APIs.
 pub const COGNITIVE_SERVICES_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
@@ -57,7 +63,13 @@ pub enum FoundryCredential {
     /// Microsoft Entra ID (Azure AD) token-based authentication.
     ///
     /// Wraps any [`TokenCredential`] implementation from `azure_identity`.
-    TokenCredential(Arc<dyn TokenCredential>),
+    /// Includes an internal cache to avoid redundant token requests.
+    TokenCredential {
+        /// The underlying credential provider.
+        credential: Arc<dyn TokenCredential>,
+        /// Cached access token (if available).
+        cache: Arc<Mutex<Option<AccessToken>>>,
+    },
 }
 
 impl FoundryCredential {
@@ -99,7 +111,10 @@ impl FoundryCredential {
     ///
     /// * `credential` - An `Arc` wrapping a `TokenCredential` implementation.
     pub fn token_credential(credential: Arc<dyn TokenCredential>) -> Self {
-        Self::TokenCredential(credential)
+        Self::TokenCredential {
+            credential,
+            cache: Arc::new(Mutex::new(None)),
+        }
     }
 
     /// Create a credential using [`DeveloperToolsCredential`](azure_identity::DeveloperToolsCredential).
@@ -110,9 +125,13 @@ impl FoundryCredential {
     ///
     /// Returns an error if credential creation fails.
     pub fn developer_tools() -> FoundryResult<Self> {
-        let credential = azure_identity::DeveloperToolsCredential::new(None)
-            .map_err(|e| FoundryError::Auth(e.to_string()))?;
-        Ok(Self::TokenCredential(credential))
+        let credential = azure_identity::DeveloperToolsCredential::new(None).map_err(|e| {
+            FoundryError::auth_with_source("failed to create developer tools credential", e)
+        })?;
+        Ok(Self::TokenCredential {
+            credential,
+            cache: Arc::new(Mutex::new(None)),
+        })
     }
 
     /// Create a credential using [`AzureCliCredential`](azure_identity::AzureCliCredential).
@@ -123,9 +142,13 @@ impl FoundryCredential {
     ///
     /// Returns an error if credential creation fails.
     pub fn azure_cli() -> FoundryResult<Self> {
-        let credential = azure_identity::AzureCliCredential::new(None)
-            .map_err(|e| FoundryError::Auth(e.to_string()))?;
-        Ok(Self::TokenCredential(credential))
+        let credential = azure_identity::AzureCliCredential::new(None).map_err(|e| {
+            FoundryError::auth_with_source("failed to create Azure CLI credential", e)
+        })?;
+        Ok(Self::TokenCredential {
+            credential,
+            cache: Arc::new(Mutex::new(None)),
+        })
     }
 
     /// Create a credential using [`ManagedIdentityCredential`](azure_identity::ManagedIdentityCredential).
@@ -136,16 +159,24 @@ impl FoundryCredential {
     ///
     /// Returns an error if credential creation fails.
     pub fn managed_identity() -> FoundryResult<Self> {
-        let credential = azure_identity::ManagedIdentityCredential::new(None)
-            .map_err(|e| FoundryError::Auth(e.to_string()))?;
-        Ok(Self::TokenCredential(credential))
+        let credential = azure_identity::ManagedIdentityCredential::new(None).map_err(|e| {
+            FoundryError::auth_with_source("failed to create managed identity credential", e)
+        })?;
+        Ok(Self::TokenCredential {
+            credential,
+            cache: Arc::new(Mutex::new(None)),
+        })
     }
 
     /// Resolve the credential to an authorization header value.
     ///
     /// For API keys, returns `Bearer <key>`.
     /// For token credentials, acquires a token for the Cognitive Services scope
-    /// and returns `Bearer <token>`.
+    /// and returns `Bearer <token>`. Tokens are cached to avoid redundant requests,
+    /// and automatically refreshed before expiration (with a 60-second buffer).
+    ///
+    /// This method is thread-safe: concurrent calls will wait for a single token
+    /// acquisition rather than making duplicate requests.
     ///
     /// # Errors
     ///
@@ -153,13 +184,35 @@ impl FoundryCredential {
     pub async fn resolve(&self) -> FoundryResult<String> {
         match self {
             Self::ApiKey(key) => Ok(format!("Bearer {}", key.expose_secret())),
-            Self::TokenCredential(credential) => {
+            Self::TokenCredential { credential, cache } => {
+                // Hold lock for the entire operation to prevent race conditions
+                let mut cached = cache.lock().await;
+
+                // Check if we have a valid cached token (with expiry buffer)
+                if let Some(ref token) = *cached {
+                    let now = azure_core::time::OffsetDateTime::now_utc();
+                    let buffer = azure_core::time::Duration::try_from(TOKEN_EXPIRY_BUFFER)
+                        .expect("buffer duration should be valid");
+                    let refresh_at = token.expires_on - buffer;
+
+                    if now < refresh_at {
+                        return Ok(format!("Bearer {}", token.token.secret()));
+                    }
+                    // Token expired or within buffer - will refresh below
+                }
+
+                // Cache miss or needs refresh - acquire new token while holding lock
                 let scopes = &[COGNITIVE_SERVICES_SCOPE];
                 let token = credential
                     .get_token(scopes, None)
                     .await
-                    .map_err(|e| FoundryError::Auth(e.to_string()))?;
-                Ok(format!("Bearer {}", token.token.secret()))
+                    .map_err(|e| FoundryError::auth_with_source("failed to acquire token", e))?;
+
+                // Store in cache and return
+                let auth_header = format!("Bearer {}", token.token.secret());
+                *cached = Some(token);
+
+                Ok(auth_header)
             }
         }
     }
@@ -169,26 +222,31 @@ impl FoundryCredential {
     /// This is useful when you need the raw token and expiration time,
     /// for example for caching or monitoring token lifetimes.
     ///
+    /// Note: This method bypasses the internal cache and always fetches a fresh token.
+    /// Use `resolve()` for normal authentication which benefits from caching.
+    ///
     /// # Errors
     ///
     /// Returns an error if this is an API key credential (use `resolve()` instead)
     /// or if token acquisition fails.
     pub async fn get_token(&self) -> FoundryResult<AccessToken> {
         match self {
-            Self::ApiKey(_) => Err(FoundryError::Auth(
-                "Cannot get token from API key credential. Use resolve() instead.".into(),
+            Self::ApiKey(_) => Err(FoundryError::auth(
+                "Cannot get token from API key credential. Use resolve() instead.",
             )),
-            Self::TokenCredential(credential) => {
+            Self::TokenCredential { credential, .. } => {
                 let scopes = &[COGNITIVE_SERVICES_SCOPE];
                 credential
                     .get_token(scopes, None)
                     .await
-                    .map_err(|e| FoundryError::Auth(e.to_string()))
+                    .map_err(|e| FoundryError::auth_with_source("failed to acquire token", e))
             }
         }
     }
 
     /// Get an access token with custom options.
+    ///
+    /// Note: This method bypasses the internal cache and always fetches a fresh token.
     ///
     /// # Arguments
     ///
@@ -202,15 +260,15 @@ impl FoundryCredential {
         options: TokenRequestOptions<'_>,
     ) -> FoundryResult<AccessToken> {
         match self {
-            Self::ApiKey(_) => Err(FoundryError::Auth(
-                "Cannot get token from API key credential.".into(),
+            Self::ApiKey(_) => Err(FoundryError::auth(
+                "Cannot get token from API key credential.",
             )),
-            Self::TokenCredential(credential) => {
+            Self::TokenCredential { credential, .. } => {
                 let scopes = &[COGNITIVE_SERVICES_SCOPE];
                 credential
                     .get_token(scopes, Some(options))
                     .await
-                    .map_err(|e| FoundryError::Auth(e.to_string()))
+                    .map_err(|e| FoundryError::auth_with_source("failed to acquire token", e))
             }
         }
     }
@@ -220,7 +278,10 @@ impl Clone for FoundryCredential {
     fn clone(&self) -> Self {
         match self {
             Self::ApiKey(key) => Self::ApiKey(key.clone()),
-            Self::TokenCredential(cred) => Self::TokenCredential(Arc::clone(cred)),
+            Self::TokenCredential { credential, cache } => Self::TokenCredential {
+                credential: Arc::clone(credential),
+                cache: Arc::clone(cache),
+            },
         }
     }
 }
@@ -229,7 +290,7 @@ impl std::fmt::Debug for FoundryCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ApiKey(_) => write!(f, "FoundryCredential::ApiKey(****)"),
-            Self::TokenCredential(_) => write!(f, "FoundryCredential::TokenCredential(...)"),
+            Self::TokenCredential { .. } => write!(f, "FoundryCredential::TokenCredential(...)"),
         }
     }
 }
@@ -238,6 +299,7 @@ impl std::fmt::Debug for FoundryCredential {
 mod tests {
     use super::*;
     use serial_test::serial;
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
 
     // Mock TokenCredential for testing
@@ -260,6 +322,71 @@ mod tests {
                 token: String::new(),
                 should_fail: true,
             })
+        }
+    }
+
+    /// Mock credential that counts calls to get_token
+    #[derive(Debug)]
+    struct CountingTokenCredential {
+        token: String,
+        call_count: AtomicU32,
+        expires_in_secs: u64,
+        delay_ms: u64,
+    }
+
+    impl CountingTokenCredential {
+        fn new(token: impl Into<String>, expires_in_secs: u64) -> Arc<Self> {
+            Arc::new(Self {
+                token: token.into(),
+                call_count: AtomicU32::new(0),
+                expires_in_secs,
+                delay_ms: 0,
+            })
+        }
+
+        fn new_with_delay(
+            token: impl Into<String>,
+            expires_in_secs: u64,
+            delay_ms: u64,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                token: token.into(),
+                call_count: AtomicU32::new(0),
+                expires_in_secs,
+                delay_ms,
+            })
+        }
+
+        fn call_count(&self) -> u32 {
+            self.call_count.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TokenCredential for CountingTokenCredential {
+        async fn get_token(
+            &self,
+            scopes: &[&str],
+            _options: Option<TokenRequestOptions<'_>>,
+        ) -> azure_core::Result<AccessToken> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+
+            // Simulate network latency to increase race condition probability
+            if self.delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
+            }
+
+            assert!(
+                scopes.contains(&COGNITIVE_SERVICES_SCOPE),
+                "Expected scope {}, got {:?}",
+                COGNITIVE_SERVICES_SCOPE,
+                scopes
+            );
+
+            Ok(AccessToken::new(
+                self.token.clone(),
+                (std::time::SystemTime::now() + Duration::from_secs(self.expires_in_secs)).into(),
+            ))
         }
     }
 
@@ -322,8 +449,8 @@ mod tests {
         let cred = FoundryCredential::token_credential(mock);
         let cloned = cred.clone();
         // Both should be TokenCredential variants
-        assert!(matches!(cred, FoundryCredential::TokenCredential(_)));
-        assert!(matches!(cloned, FoundryCredential::TokenCredential(_)));
+        assert!(matches!(cred, FoundryCredential::TokenCredential { .. }));
+        assert!(matches!(cloned, FoundryCredential::TokenCredential { .. }));
     }
 
     #[test]
@@ -362,8 +489,8 @@ mod tests {
         let result = FoundryCredential::from_env();
         // Either succeeds with TokenCredential or fails with auth error
         match result {
-            Ok(cred) => assert!(matches!(cred, FoundryCredential::TokenCredential(_))),
-            Err(e) => assert!(matches!(e, FoundryError::Auth(_))),
+            Ok(cred) => assert!(matches!(cred, FoundryCredential::TokenCredential { .. })),
+            Err(e) => assert!(matches!(e, FoundryError::Auth { .. })),
         }
 
         // Restore original value
@@ -377,7 +504,7 @@ mod tests {
     fn token_credential_constructor() {
         let mock = MockTokenCredential::new("my-token");
         let cred = FoundryCredential::token_credential(mock);
-        assert!(matches!(cred, FoundryCredential::TokenCredential(_)));
+        assert!(matches!(cred, FoundryCredential::TokenCredential { .. }));
     }
 
     #[tokio::test]
@@ -404,8 +531,8 @@ mod tests {
         let result = cred.resolve().await;
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, FoundryError::Auth(_)));
-        assert!(err.to_string().contains("Mock credential failure"));
+        assert!(matches!(err, FoundryError::Auth { .. }));
+        assert!(err.to_string().contains("failed to acquire token"));
     }
 
     #[tokio::test]
@@ -415,7 +542,7 @@ mod tests {
 
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, FoundryError::Auth(_)));
+        assert!(matches!(err, FoundryError::Auth { .. }));
         assert!(err.to_string().contains("API key credential"));
     }
 
@@ -437,7 +564,7 @@ mod tests {
         let result = cred.get_token_with_options(options).await;
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FoundryError::Auth(_)));
+        assert!(matches!(result.unwrap_err(), FoundryError::Auth { .. }));
     }
 
     #[tokio::test]
@@ -459,5 +586,207 @@ mod tests {
             COGNITIVE_SERVICES_SCOPE,
             "https://cognitiveservices.azure.com/.default"
         );
+    }
+
+    // ========== Token Caching Tests ==========
+
+    #[tokio::test]
+    async fn test_token_cache_stores_valid_token() {
+        // Setup: Create a counting mock that expires in 1 hour
+        let mock = CountingTokenCredential::new("cached-token", 3600);
+        let cred = FoundryCredential::token_credential(mock.clone());
+
+        // Action: Call resolve() twice
+        let result1 = cred.resolve().await.expect("first resolve should succeed");
+        let result2 = cred.resolve().await.expect("second resolve should succeed");
+
+        // Assert: Both return the same token
+        assert_eq!(result1, "Bearer cached-token");
+        assert_eq!(result2, "Bearer cached-token");
+
+        // Assert: get_token was called only ONCE (second call used cache)
+        assert_eq!(
+            mock.call_count(),
+            1,
+            "get_token should be called only once, second call should use cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_token_cache_expires_after_ttl() {
+        // Setup: Create a counting mock that expires in 1 second
+        let mock = CountingTokenCredential::new("short-lived-token", 1);
+        let cred = FoundryCredential::token_credential(mock.clone());
+
+        // Action: Call resolve() to populate cache
+        let result1 = cred.resolve().await.expect("first resolve should succeed");
+        assert_eq!(result1, "Bearer short-lived-token");
+        assert_eq!(mock.call_count(), 1, "first call should fetch token");
+
+        // Wait for token to expire (slightly more than 1 second)
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+
+        // Call resolve again - should need to refresh
+        let result2 = cred.resolve().await.expect("second resolve should succeed");
+        assert_eq!(result2, "Bearer short-lived-token");
+
+        // Assert: get_token was called TWICE (second refresh due to expiration)
+        assert_eq!(
+            mock.call_count(),
+            2,
+            "get_token should be called twice, second call refreshes expired token"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_token_cache_thread_safe() {
+        // Setup: Create a counting mock that expires in 1 hour
+        // Adding a small delay to simulate network latency and increase race condition probability
+        let mock = CountingTokenCredential::new_with_delay("concurrent-token", 3600, 10);
+        let cred = Arc::new(FoundryCredential::token_credential(mock.clone()));
+
+        // Action: Spawn 10 concurrent tasks that all call resolve()
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let cred_clone = Arc::clone(&cred);
+            handles.push(tokio::spawn(async move {
+                cred_clone.resolve().await.expect("resolve should succeed")
+            }));
+        }
+
+        // Wait for all tasks to complete
+        let results: Vec<String> = futures::future::join_all(handles)
+            .await
+            .into_iter()
+            .map(|r| r.expect("task should not panic"))
+            .collect();
+
+        // Assert: All tasks got the same token
+        for result in &results {
+            assert_eq!(result, "Bearer concurrent-token");
+        }
+
+        // Assert: get_token was called only ONCE (no race conditions)
+        assert_eq!(
+            mock.call_count(),
+            1,
+            "get_token should be called only once, even with concurrent access"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_token_cache_refreshes_before_expiry() {
+        // Setup: Token that "expires" in 30 seconds, which is within the 60s buffer
+        // This should trigger a refresh even though the token hasn't technically expired
+        let mock = CountingTokenCredential::new("almost-expired-token", 30);
+        let cred = FoundryCredential::token_credential(mock.clone());
+
+        // First call - should fetch token
+        let result1 = cred.resolve().await.expect("first resolve should succeed");
+        assert_eq!(result1, "Bearer almost-expired-token");
+        assert_eq!(mock.call_count(), 1, "first call should fetch token");
+
+        // Second call - token is within expiry buffer, should refresh
+        let result2 = cred.resolve().await.expect("second resolve should succeed");
+        assert_eq!(result2, "Bearer almost-expired-token");
+
+        // Assert: get_token was called TWICE because token is within expiry buffer
+        assert_eq!(
+            mock.call_count(),
+            2,
+            "get_token should be called twice, token is within 60s expiry buffer"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_api_key_credential_no_cache() {
+        // Setup: API key credential
+        let cred = FoundryCredential::api_key("test-api-key");
+
+        // Action: Call resolve() multiple times
+        let result1 = cred.resolve().await.expect("first resolve should succeed");
+        let result2 = cred.resolve().await.expect("second resolve should succeed");
+        let result3 = cred.resolve().await.expect("third resolve should succeed");
+
+        // Assert: All calls return the same API key immediately
+        assert_eq!(result1, "Bearer test-api-key");
+        assert_eq!(result2, "Bearer test-api-key");
+        assert_eq!(result3, "Bearer test-api-key");
+
+        // The test passes if we get here without errors - API keys don't use caching
+        // and should return immediately without any async waits
+    }
+
+    // ========== High Concurrency Tests ==========
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_100_concurrent_token_refreshes() {
+        // Setup: 100 concurrent tasks, cache empty, all calling resolve() simultaneously
+        // Adding delay to simulate real token acquisition latency
+        let mock = CountingTokenCredential::new_with_delay("high-concurrency-token", 3600, 50);
+        let cred = Arc::new(FoundryCredential::token_credential(mock.clone()));
+
+        // Action: Spawn 100 concurrent tasks
+        let mut handles = Vec::new();
+        for _ in 0..100 {
+            let cred_clone = Arc::clone(&cred);
+            handles.push(tokio::spawn(async move {
+                cred_clone.resolve().await.expect("resolve should succeed")
+            }));
+        }
+
+        // Wait for all tasks to complete
+        let results: Vec<String> = futures::future::join_all(handles)
+            .await
+            .into_iter()
+            .map(|r| r.expect("task should not panic"))
+            .collect();
+
+        // Assert: All 100 tasks got the same token
+        assert_eq!(results.len(), 100);
+        for result in &results {
+            assert_eq!(result, "Bearer high-concurrency-token");
+        }
+
+        // Assert: get_token was called only ONCE despite 100 concurrent calls
+        // This verifies the mutex correctly serializes access
+        assert_eq!(
+            mock.call_count(),
+            1,
+            "get_token should be called only once, even with 100 concurrent tasks"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_no_deadlock_with_repeated_concurrent_access() {
+        // Setup: Simulate high load with repeated concurrent access
+        let mock = CountingTokenCredential::new_with_delay("repeated-access-token", 3600, 10);
+        let cred = Arc::new(FoundryCredential::token_credential(mock.clone()));
+
+        // Action: 50 tasks, each calling resolve() 10 times
+        let mut handles = Vec::new();
+        for _ in 0..50 {
+            let cred_clone = Arc::clone(&cred);
+            handles.push(tokio::spawn(async move {
+                for _ in 0..10 {
+                    let _ = cred_clone.resolve().await.expect("resolve should succeed");
+                }
+            }));
+        }
+
+        // All tasks should complete without deadlock (timeout would indicate deadlock)
+        let timeout_result =
+            tokio::time::timeout(Duration::from_secs(10), futures::future::join_all(handles)).await;
+
+        assert!(
+            timeout_result.is_ok(),
+            "Tasks should complete within timeout (no deadlock)"
+        );
+
+        // All 500 total calls should have succeeded
+        let results = timeout_result.unwrap();
+        for result in results {
+            assert!(result.is_ok(), "Task should not have panicked");
+        }
     }
 }

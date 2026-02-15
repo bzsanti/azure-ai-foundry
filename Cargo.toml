@@ -47,3 +47,4 @@ wiremock = "0.6"
 # Utils
 url = "2"
 secrecy = "0.10"
+fastrand = "2"

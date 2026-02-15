@@ -225,7 +225,8 @@ impl EmbeddingRequestBuilder {
         self
     }
 
-    /// Build the request, returning an error if required fields are missing.
+    /// Build the request, returning an error if required fields are missing
+    /// or parameter values are invalid.
     pub fn try_build(self) -> FoundryResult<EmbeddingRequest> {
         let model = self
             .model
@@ -233,6 +234,15 @@ impl EmbeddingRequestBuilder {
         let input = self
             .input
             .ok_or_else(|| FoundryError::Builder("input is required".into()))?;
+
+        // Validate dimensions (must be > 0)
+        if let Some(dims) = self.dimensions {
+            if dims == 0 {
+                return Err(FoundryError::Builder(
+                    "dimensions must be greater than 0".into(),
+                ));
+            }
+        }
 
         Ok(EmbeddingRequest {
             model,
@@ -518,7 +528,9 @@ mod tests {
 
         assert!(result.is_err());
         match result.unwrap_err() {
-            FoundryError::Http { status, message } => {
+            FoundryError::Http {
+                status, message, ..
+            } => {
                 assert_eq!(status, 429);
                 assert!(message.contains("Rate limit"));
             }
@@ -647,6 +659,41 @@ mod tests {
             azure_ai_foundry_core::error::FoundryError::Builder(_)
         ));
         assert!(err.to_string().contains("input"));
+    }
+
+    #[test]
+    fn test_embedding_builder_validates_dimensions() {
+        // dimensions must be greater than 0
+        let result = EmbeddingRequest::builder()
+            .model("text-embedding-3-small")
+            .input("Hello")
+            .dimensions(0) // Invalid: must be > 0
+            .try_build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            azure_ai_foundry_core::error::FoundryError::Builder(_)
+        ));
+        assert!(
+            err.to_string().contains("dimensions"),
+            "Error should mention dimensions: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_embedding_builder_accepts_valid_dimensions() {
+        let result = EmbeddingRequest::builder()
+            .model("text-embedding-3-small")
+            .input("Hello")
+            .dimensions(512)
+            .try_build();
+
+        assert!(result.is_ok());
+        let request = result.unwrap();
+        assert_eq!(request.dimensions, Some(512));
     }
 
     #[test]
