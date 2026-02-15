@@ -129,13 +129,15 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-02-15)
+## Session Status (2026-02-16)
 
-**Branch:** `docs/session-update`
+**Branch:** `main`
 
 **v0.1.0 Status:** RELEASED
 
-**Release Tag:** `v0.1.0` pushed to GitHub, release workflow triggered.
+**v0.2.0 Status:** Code complete, release workflow pending
+
+All v0.2.0 quality improvements are merged to main. The crates.io Trusted Publishing workflow needs debugging (PRs #6, #7, #8 attempted fixes for OIDC token exchange).
 
 **Completed Features:**
 - Real authentication with `azure_identity` (`Arc<dyn TokenCredential>`)
@@ -144,44 +146,24 @@ When implementing:
 - SSE parsing optimized with `memchr`
 - Embeddings API (`embed()` function with builder pattern)
 
-**Quality Improvements v0.1.0 (9 phases):**
-1. Test isolation with `serial_test` crate
-2. Builder pattern with `try_build()` returning `Result`
-3. SSE performance optimized (memchr, Vec<u8> buffer)
-4. Security logging with message truncation
-5. Documentation for internal types
-6. Centralized test helpers
-7. API consistency with `IntoIterator` bounds
-8. Error tests with pattern matching
-9. Test constants centralization
+**Quality Improvements v0.2.0 (8 of 10 implemented):**
 
-**Quality Improvements v0.2.0 (TDD Plan execution):**
+| # | Improvement | Status |
+|---|-------------|--------|
+| 1 | SSE Buffer Limit (1MB) | ✅ Complete |
+| 2 | Error Sanitization | ✅ Complete |
+| 3 | Streaming Timeouts (5 min) | ✅ Complete |
+| 4 | Token Race Condition | ✅ Already in v0.1.0 |
+| 5 | Builder Validations | ✅ Complete |
+| 6 | Streaming Retry Logic | ✅ Complete |
+| 7 | Clone Optimization | ❌ Discarded |
+| 8 | Doc Examples | ✅ Complete |
+| 9 | Tracing Instrumentation | ⏳ Deferred to v0.3.0 |
+| 10 | High Concurrency Tests | ✅ Complete |
 
-Phase 1 - Security:
-1. SSE Buffer Limit: DoS prevention with 1MB buffer limit
-2. Error Sanitization: Automatic redaction of Bearer tokens and API keys
-
-Phase 2 - Robustness:
-3. Streaming Timeouts: 5-minute default timeout for streaming responses
-4. Token Race Condition: Already implemented in v0.1.0 (verified)
-5. Builder Validations: Range validation for temperature, top_p, penalties, dimensions
-6. Streaming Retry Logic: Pre-stream retry with exponential backoff
-
-Phase 3 - Optional:
-7. Clone Optimization: ❌ Discarded (negligible impact, clone is required)
-8. Doc Examples: ✓ Error handling examples for complete() and complete_stream()
-9. Tracing Instrumentation: ⏳ Deferred to v0.3.0 (will be implemented with Agent Service)
-10. High Concurrency Tests: ✓ Tests with 100+ concurrent tasks for thread-safety
-
-**Release Infrastructure:**
-- GitHub Actions release workflow (`.github/workflows/release.yml`)
-- CHANGELOG.md following Keep a Changelog format
-- Automatic crates.io publishing on tag push
-
-**Documentation:**
-- README.md for `azure_ai_foundry_core` crate
-- README.md for `azure_ai_foundry_models` crate
-- Doc examples with error handling patterns
+**Pending:**
+- Fix Trusted Publishing workflow for crates.io (OIDC token exchange)
+- Publish v0.2.0 to crates.io
 
 **Test Summary:**
 - 160 tests passing (79 core + 65 models + 16 doc-tests)
