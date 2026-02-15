@@ -129,9 +129,9 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2025-02-15)
+## Session Status (2026-02-15)
 
-**Branch:** `main`
+**Branch:** `docs/session-update`
 
 **v0.1.0 Status:** RELEASED
 
@@ -160,6 +160,10 @@ When implementing:
 - CHANGELOG.md following Keep a Changelog format
 - Automatic crates.io publishing on tag push
 
+**Documentation:**
+- README.md for `azure_ai_foundry_core` crate
+- README.md for `azure_ai_foundry_models` crate
+
 **Test Summary:**
-- 97 tests passing (45 core + 52 models + 14 doc-tests)
+- 111 tests passing (45 core + 52 models + 14 doc-tests)
 - All clippy checks passing (0 warnings)
