@@ -13,13 +13,14 @@ This crate provides the foundational building blocks used by all other `azure_ai
 - **FoundryClient** — HTTP client with builder pattern for Azure AI Foundry services
 - **FoundryCredential** — Authentication via API key or Microsoft Entra ID
 - **FoundryError** — Typed error handling with `thiserror`
-- **Shared types** — Common request/response models
+- **Retry logic** — Automatic retries with exponential backoff for transient errors
+- **Security** — Error sanitization to prevent credential leaks in logs
 
 ## Installation
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.1"
+azure_ai_foundry_core = "0.2"
 tokio = { version = "1", features = ["full"] }
 ```
 

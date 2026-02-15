@@ -10,15 +10,15 @@ Chat completions and embeddings client for the Azure AI Foundry Rust SDK.
 
 - **Chat Completions** — Synchronous and streaming responses
 - **Embeddings** — Generate vector embeddings for text
-- **Streaming** — Server-sent events (SSE) with optimized parsing
-- **Builder Pattern** — Type-safe request construction
+- **Streaming** — SSE with optimized parsing and 1MB buffer protection
+- **Builder Pattern** — Type-safe request construction with parameter validation
 
 ## Installation
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.1"
-azure_ai_foundry_models = "0.1"
+azure_ai_foundry_core = "0.2"
+azure_ai_foundry_models = "0.2"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -53,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### Streaming Chat Completions
 
 ```rust
-use azure_ai_foundry_models::chat::{ChatCompletionRequest, Message, complete_streaming};
+use azure_ai_foundry_models::chat::{ChatCompletionRequest, Message, complete_stream};
 use futures::StreamExt;
 
 let request = ChatCompletionRequest::builder()
@@ -61,7 +61,7 @@ let request = ChatCompletionRequest::builder()
     .message(Message::user("Tell me a story"))
     .build();
 
-let mut stream = complete_streaming(&client, &request).await?;
+let mut stream = complete_stream(&client, &request).await?;
 
 while let Some(chunk) = stream.next().await {
     let chunk = chunk?;
