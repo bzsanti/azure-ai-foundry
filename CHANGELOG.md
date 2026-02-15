@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2025-02-15
+
+### Added
+
+#### Robustness
+- Streaming timeout configuration (5-minute default, separate from HTTP timeout)
+- Pre-stream retry logic with exponential backoff and jitter for 503/429 errors
+- Builder validations for parameter ranges (temperature, top_p, penalties, dimensions)
+- High concurrency tests (100+ concurrent tasks) for token refresh verification
+- Documentation examples with error handling for `complete()` and `complete_stream()`
+
+### Security
+
+- **SSE Buffer Limit**: Maximum 1MB buffer per SSE line to prevent DoS attacks (CWE-400)
+- **Error Sanitization**: Bearer tokens and API keys are automatically redacted from error messages (CWE-209)
+
+### Changed
+
+- `post_stream()` now uses dedicated streaming timeout instead of default HTTP timeout
+- Builder `try_build()` methods now validate parameter ranges before construction
+
 ## [0.1.0] - 2025-02-14
 
 ### Added
@@ -49,5 +70,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API keys wrapped with `secrecy` crate to prevent accidental logging
 - Error message truncation to prevent sensitive data leakage
 
-[Unreleased]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bzsanti/azure-ai-foundry/releases/tag/v0.1.0
