@@ -135,9 +135,11 @@ When implementing:
 
 **v0.1.0 Status:** RELEASED
 
-**v0.2.0 Status:** Code complete, release workflow pending
+**v0.2.0 Status:** RELEASED ✅
 
-All v0.2.0 quality improvements are merged to main. The crates.io Trusted Publishing workflow needs debugging (PRs #6, #7, #8 attempted fixes for OIDC token exchange).
+Published to crates.io:
+- https://crates.io/crates/azure_ai_foundry_core/0.2.0
+- https://crates.io/crates/azure_ai_foundry_models/0.2.0
 
 **Completed Features:**
 - Real authentication with `azure_identity` (`Arc<dyn TokenCredential>`)
@@ -145,6 +147,7 @@ All v0.2.0 quality improvements are merged to main. The crates.io Trusted Publis
 - Chat completions (sync + streaming)
 - SSE parsing optimized with `memchr`
 - Embeddings API (`embed()` function with builder pattern)
+- Trusted Publishing with `rust-lang/crates-io-auth-action@v1` (PR #10)
 
 **Quality Improvements v0.2.0 (8 of 10 implemented):**
 
@@ -161,9 +164,10 @@ All v0.2.0 quality improvements are merged to main. The crates.io Trusted Publis
 | 9 | Tracing Instrumentation | ⏳ Deferred to v0.3.0 |
 | 10 | High Concurrency Tests | ✅ Complete |
 
-**Pending:**
-- Fix Trusted Publishing workflow for crates.io (OIDC token exchange)
-- Publish v0.2.0 to crates.io
+**Next Steps (v0.3.0):**
+- Tracing instrumentation
+- `azure_ai_foundry_agents` crate (Agent Service)
+- `azure_ai_foundry_tools` crate (Vision, Document Intelligence)
 
 **Test Summary:**
 - 160 tests passing (79 core + 65 models + 16 doc-tests)
