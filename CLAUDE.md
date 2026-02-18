@@ -129,46 +129,47 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-02-16)
+## Session Status (2026-02-18)
 
-**Branch:** `main`
+**Branch:** `develop/v0.3.0`
 
 **v0.1.0 Status:** RELEASED
-
 **v0.2.0 Status:** RELEASED ✅
 
 Published to crates.io:
 - https://crates.io/crates/azure_ai_foundry_core/0.2.0
 - https://crates.io/crates/azure_ai_foundry_models/0.2.0
 
-**Completed Features:**
-- Real authentication with `azure_identity` (`Arc<dyn TokenCredential>`)
-- API key and Entra ID authentication
-- Chat completions (sync + streaming)
-- SSE parsing optimized with `memchr`
-- Embeddings API (`embed()` function with builder pattern)
-- Trusted Publishing with `rust-lang/crates-io-auth-action@v1` (PR #10)
+**v0.3.0 Status:** IN PROGRESS
 
-**Quality Improvements v0.2.0 (8 of 10 implemented):**
+**Completed Features v0.3.0:**
+- ✅ Tracing instrumentation (see below)
+- ✅ README updated for v0.2.0 release
 
-| # | Improvement | Status |
-|---|-------------|--------|
-| 1 | SSE Buffer Limit (1MB) | ✅ Complete |
-| 2 | Error Sanitization | ✅ Complete |
-| 3 | Streaming Timeouts (5 min) | ✅ Complete |
-| 4 | Token Race Condition | ✅ Already in v0.1.0 |
-| 5 | Builder Validations | ✅ Complete |
-| 6 | Streaming Retry Logic | ✅ Complete |
-| 7 | Clone Optimization | ❌ Discarded |
-| 8 | Doc Examples | ✅ Complete |
-| 9 | Tracing Instrumentation | ⏳ Deferred to v0.3.0 |
-| 10 | High Concurrency Tests | ✅ Complete |
+**Tracing Instrumentation (complete):**
+
+| Span | Fields |
+|------|--------|
+| `foundry::auth::resolve` | credential_type |
+| `foundry::client::get` | path, attempt, status_code |
+| `foundry::client::post` | path, attempt, status_code |
+| `foundry::client::post_stream` | path, attempt, status_code, streaming_timeout_secs |
+| `foundry::chat::complete` | model, prompt_tokens, completion_tokens |
+| `foundry::chat::complete_stream` | model |
+| `foundry::embeddings::embed` | model, input_count, prompt_tokens |
+
+Additional improvements:
+- Refactored `compute_backoff()` helper (eliminated code duplication)
+- Security test: verify error events don't leak bearer tokens
+
+Deferred to future:
+- Trace-level SSE chunk events
+- Token cache hit/miss events
 
 **Next Steps (v0.3.0):**
-- Tracing instrumentation
 - `azure_ai_foundry_agents` crate (Agent Service)
 - `azure_ai_foundry_tools` crate (Vision, Document Intelligence)
 
 **Test Summary:**
-- 160 tests passing (79 core + 65 models + 16 doc-tests)
+- 169 tests passing (85 core + 68 models + 16 doc-tests)
 - All clippy checks passing (0 warnings)
