@@ -28,3 +28,4 @@ wiremock.workspace = true
 async-trait = "0.1"
 serial_test = "3.2"
 futures.workspace = true
+tracing-test = "0.2"

@@ -389,13 +389,35 @@ pub struct Delta {
 /// }
 /// # }
 /// ```
+///
+/// # Tracing
+///
+/// This function emits a span named `foundry::chat::complete` with the following fields:
+/// - `model`: The model being used for completion
+/// - `prompt_tokens`: Number of tokens in the prompt (recorded after response)
+/// - `completion_tokens`: Number of tokens in the completion (recorded after response)
+#[tracing::instrument(
+    name = "foundry::chat::complete",
+    skip(client, request),
+    fields(model = %request.model, prompt_tokens, completion_tokens)
+)]
 pub async fn complete(
     client: &FoundryClient,
     request: &ChatCompletionRequest,
 ) -> FoundryResult<ChatCompletionResponse> {
+    tracing::debug!("sending chat completion request");
+
     let response = client.post("/openai/v1/chat/completions", request).await?;
 
     let body = response.json::<ChatCompletionResponse>().await?;
+
+    // Record token usage in the span
+    if let Some(ref usage) = body.usage {
+        let span = tracing::Span::current();
+        span.record("prompt_tokens", usage.prompt_tokens);
+        span.record("completion_tokens", usage.completion_tokens);
+    }
+
     Ok(body)
 }
 
@@ -466,10 +488,22 @@ pub async fn complete(
 /// }
 /// # }
 /// ```
+///
+/// # Tracing
+///
+/// This function emits a span named `foundry::chat::complete_stream` with the following fields:
+/// - `model`: The model being used for completion
+#[tracing::instrument(
+    name = "foundry::chat::complete_stream",
+    skip(client, request),
+    fields(model = %request.model)
+)]
 pub async fn complete_stream(
     client: &FoundryClient,
     request: &ChatCompletionRequest,
 ) -> FoundryResult<impl Stream<Item = FoundryResult<ChatCompletionChunk>>> {
+    tracing::debug!("initiating streaming chat completion");
+
     // Create a modified request with stream: true
     let stream_request = StreamingRequest {
         model: &request.model,
@@ -486,6 +520,8 @@ pub async fn complete_stream(
     let response = client
         .post_stream("/openai/v1/chat/completions", &stream_request)
         .await?;
+
+    tracing::debug!("stream initiated");
 
     Ok(parse_sse_stream(response))
 }
@@ -643,6 +679,7 @@ fn parse_sse_line(line: &str) -> Option<FoundryResult<ChatCompletionChunk>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1660,5 +1697,83 @@ mod tests {
 
         // We should have 1000 chunks
         assert_eq!(chunks.len(), 1000);
+    }
+
+    // --- Tracing Instrumentation Tests ---
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_complete_emits_chat_span() {
+        let server = MockServer::start().await;
+
+        let response_body = serde_json::json!({
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let _ = complete(&client, &request).await;
+
+        assert!(logs_contain("foundry::chat::complete"));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_complete_stream_emits_chat_stream_span() {
+        let server = MockServer::start().await;
+
+        let sse_body = r#"data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}
+
+data: [DONE]
+
+"#;
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(sse_body)
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let _ = complete_stream(&client, &request).await;
+
+        assert!(logs_contain("foundry::chat::complete_stream"));
     }
 }

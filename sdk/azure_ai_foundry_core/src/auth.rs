@@ -73,6 +73,17 @@ pub enum FoundryCredential {
 }
 
 impl FoundryCredential {
+    /// Returns a static string describing the credential type for tracing.
+    ///
+    /// This method is used internally to populate span fields without
+    /// exposing sensitive information.
+    fn credential_type_name(&self) -> &'static str {
+        match self {
+            Self::ApiKey(_) => "api_key",
+            Self::TokenCredential { .. } => "token_credential",
+        }
+    }
+
     /// Create a credential from environment variables.
     ///
     /// Checks `AZURE_AI_FOUNDRY_API_KEY` first. If not set or empty,
@@ -178,10 +189,17 @@ impl FoundryCredential {
     /// This method is thread-safe: concurrent calls will wait for a single token
     /// acquisition rather than making duplicate requests.
     ///
+    /// # Tracing
+    ///
+    /// This method emits a span named `foundry::auth::resolve` with the following fields:
+    /// - `credential_type`: Either "api_key" or "token_credential"
+    ///
     /// # Errors
     ///
     /// Returns an error if token acquisition fails.
+    #[tracing::instrument(name = "foundry::auth::resolve", skip(self), fields(credential_type = self.credential_type_name()))]
     pub async fn resolve(&self) -> FoundryResult<String> {
+        tracing::debug!("resolving credential");
         match self {
             Self::ApiKey(key) => Ok(format!("Bearer {}", key.expose_secret())),
             Self::TokenCredential { credential, cache } => {
@@ -301,6 +319,7 @@ mod tests {
     use serial_test::serial;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
+    use tracing_test::traced_test;
 
     // Mock TokenCredential for testing
     #[derive(Debug)]
@@ -788,5 +807,28 @@ mod tests {
         for result in results {
             assert!(result.is_ok(), "Task should not have panicked");
         }
+    }
+
+    // --- Tracing Instrumentation Tests ---
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_resolve_emits_auth_span() {
+        let cred = FoundryCredential::api_key("test-key");
+        let _ = cred.resolve().await;
+
+        // Verify span was emitted with debug event
+        assert!(logs_contain("foundry::auth::resolve"));
+        assert!(logs_contain("resolving credential"));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_resolve_emits_credential_type_field() {
+        // Test API key credential type
+        let api_key_cred = FoundryCredential::api_key("test-key");
+        let _ = api_key_cred.resolve().await;
+        assert!(logs_contain("credential_type"));
+        assert!(logs_contain("api_key"));
     }
 }

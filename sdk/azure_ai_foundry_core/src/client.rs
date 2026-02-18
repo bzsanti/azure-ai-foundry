@@ -92,6 +92,26 @@ pub fn is_retriable_status(status: u16) -> bool {
     matches!(status, 429 | 500 | 502 | 503 | 504)
 }
 
+/// Compute backoff duration with jitter for retry attempts.
+///
+/// Calculates exponential backoff (2^attempt * initial_backoff) with ±25% jitter
+/// to prevent thundering herd problems when multiple clients retry simultaneously.
+///
+/// # Arguments
+///
+/// * `attempt` - The current retry attempt number (0-indexed)
+/// * `initial_backoff` - Base backoff duration for the first retry
+///
+/// # Returns
+///
+/// The computed backoff duration with jitter applied
+#[inline]
+fn compute_backoff(attempt: u32, initial_backoff: Duration) -> Duration {
+    let base_backoff = initial_backoff * 2_u32.pow(attempt);
+    let jitter = 0.75 + fastrand::f64() * 0.5; // 0.75 to 1.25
+    base_backoff.mul_f64(jitter)
+}
+
 /// Configuration for automatic retry behavior on transient errors.
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -195,15 +215,32 @@ impl FoundryClient {
     ///
     /// * `path` - The API path to request.
     ///
+    /// # Tracing
+    ///
+    /// This method emits a span named `foundry::client::get` with the following fields:
+    /// - `path`: The API path being requested
+    /// - `attempt`: Current retry attempt (0-indexed)
+    /// - `status_code`: HTTP status code of the response
+    ///
     /// # Errors
     ///
     /// Returns an error if authentication fails, the request fails after all retries,
     /// or the server returns a non-retriable error response.
+    #[tracing::instrument(
+        name = "foundry::client::get",
+        skip(self),
+        fields(path = %path, attempt, status_code)
+    )]
     pub async fn get(&self, path: &str) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
         let auth = self.credential.resolve().await?;
 
         for attempt in 0..=self.retry_policy.max_retries {
+            let span = tracing::Span::current();
+            span.record("attempt", attempt);
+
+            tracing::debug!("sending GET request");
+
             let response = self
                 .http
                 .get(url.clone())
@@ -213,6 +250,7 @@ impl FoundryClient {
                 .await?;
 
             let status = response.status().as_u16();
+            span.record("status_code", status);
 
             // Success - return response
             if response.status().is_success() {
@@ -224,11 +262,9 @@ impl FoundryClient {
                 return Self::check_response(response).await;
             }
 
-            // Calculate backoff with jitter: base_backoff * jitter_factor
-            // jitter_factor is in range [0.75, 1.25] for ±25% variation
-            let base_backoff = self.retry_policy.initial_backoff * 2_u32.pow(attempt);
-            let jitter = 0.75 + fastrand::f64() * 0.5; // 0.75 to 1.25
-            let backoff = base_backoff.mul_f64(jitter);
+            tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
+
+            let backoff = compute_backoff(attempt, self.retry_policy.initial_backoff);
             tokio::time::sleep(backoff).await;
         }
 
@@ -246,10 +282,22 @@ impl FoundryClient {
     /// * `path` - The API path to request.
     /// * `body` - The request body to serialize as JSON.
     ///
+    /// # Tracing
+    ///
+    /// This method emits a span named `foundry::client::post` with the following fields:
+    /// - `path`: The API path being requested
+    /// - `attempt`: Current retry attempt (0-indexed)
+    /// - `status_code`: HTTP status code of the response
+    ///
     /// # Errors
     ///
     /// Returns an error if authentication fails, serialization fails,
     /// the request fails after all retries, or the server returns a non-retriable error.
+    #[tracing::instrument(
+        name = "foundry::client::post",
+        skip(self, body),
+        fields(path = %path, attempt, status_code)
+    )]
     pub async fn post<T: serde::Serialize>(
         &self,
         path: &str,
@@ -259,6 +307,11 @@ impl FoundryClient {
         let auth = self.credential.resolve().await?;
 
         for attempt in 0..=self.retry_policy.max_retries {
+            let span = tracing::Span::current();
+            span.record("attempt", attempt);
+
+            tracing::debug!("sending POST request");
+
             let response = self
                 .http
                 .post(url.clone())
@@ -269,6 +322,7 @@ impl FoundryClient {
                 .await?;
 
             let status = response.status().as_u16();
+            span.record("status_code", status);
 
             // Success - return response
             if response.status().is_success() {
@@ -280,10 +334,9 @@ impl FoundryClient {
                 return Self::check_response(response).await;
             }
 
-            // Calculate backoff with jitter: base_backoff * jitter_factor
-            let base_backoff = self.retry_policy.initial_backoff * 2_u32.pow(attempt);
-            let jitter = 0.75 + fastrand::f64() * 0.5; // 0.75 to 1.25
-            let backoff = base_backoff.mul_f64(jitter);
+            tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
+
+            let backoff = compute_backoff(attempt, self.retry_policy.initial_backoff);
             tokio::time::sleep(backoff).await;
         }
 
@@ -301,10 +354,23 @@ impl FoundryClient {
     /// * `path` - The API path to request.
     /// * `body` - The request body to serialize as JSON.
     ///
+    /// # Tracing
+    ///
+    /// This method emits a span named `foundry::client::post_stream` with the following fields:
+    /// - `path`: The API path being requested
+    /// - `attempt`: Current retry attempt (0-indexed)
+    /// - `status_code`: HTTP status code of the response
+    /// - `streaming_timeout_secs`: The streaming timeout in seconds
+    ///
     /// # Errors
     ///
     /// Returns an error if authentication fails, serialization fails,
     /// the request fails, or the HTTP status code indicates an error.
+    #[tracing::instrument(
+        name = "foundry::client::post_stream",
+        skip(self, body),
+        fields(path = %path, attempt, status_code, streaming_timeout_secs = self.streaming_timeout.as_secs())
+    )]
     pub async fn post_stream<T: serde::Serialize>(
         &self,
         path: &str,
@@ -316,6 +382,11 @@ impl FoundryClient {
         // Retry loop for pre-stream errors only (connection errors and retriable status codes)
         // Once we receive a success response, the stream starts and we cannot retry.
         for attempt in 0..=self.retry_policy.max_retries {
+            let span = tracing::Span::current();
+            span.record("attempt", attempt);
+
+            tracing::debug!("sending POST request for streaming");
+
             // Use streaming-specific timeout (longer than default for streaming responses)
             let response = self
                 .http
@@ -328,9 +399,11 @@ impl FoundryClient {
                 .await?;
 
             let status = response.status().as_u16();
+            span.record("status_code", status);
 
             // Success - return response for streaming (no more retries after this point)
             if response.status().is_success() {
+                tracing::debug!("stream started");
                 return Ok(response);
             }
 
@@ -339,11 +412,9 @@ impl FoundryClient {
                 return Self::check_response(response).await;
             }
 
-            // Retriable error - consume error body and retry
-            // Calculate backoff with jitter: base_backoff * jitter_factor
-            let base_backoff = self.retry_policy.initial_backoff * 2_u32.pow(attempt);
-            let jitter = 0.75 + fastrand::f64() * 0.5; // 0.75 to 1.25
-            let backoff = base_backoff.mul_f64(jitter);
+            tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
+
+            let backoff = compute_backoff(attempt, self.retry_policy.initial_backoff);
             tokio::time::sleep(backoff).await;
         }
 
@@ -612,6 +683,7 @@ impl FoundryClientBuilder {
 mod tests {
     use super::*;
     use serial_test::serial;
+    use tracing_test::traced_test;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -1668,5 +1740,99 @@ mod tests {
             2,
             "Should have two redaction markers"
         );
+    }
+
+    // --- Tracing Instrumentation Tests ---
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_get_emits_http_span() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/tracing-test"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("OK"))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+        let _ = client.get("/tracing-test").await;
+
+        // Verifies span is emitted with debug event
+        assert!(logs_contain("foundry::client::get"));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_post_emits_http_span() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/tracing-post-test"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"ok": true}"#))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+        let _ = client
+            .post("/tracing-post-test", &serde_json::json!({"test": true}))
+            .await;
+
+        assert!(logs_contain("foundry::client::post"));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_post_stream_emits_http_span() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/tracing-stream-test"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("data: test\n\n")
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+        let _ = client
+            .post_stream("/tracing-stream-test", &serde_json::json!({"stream": true}))
+            .await;
+
+        assert!(logs_contain("foundry::client::post_stream"));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_error_events_do_not_contain_bearer_tokens() {
+        let server = MockServer::start().await;
+
+        // Error response containing a bearer token that should be sanitized
+        Mock::given(method("GET"))
+            .and(path("/secret-error"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_string("Invalid token: Bearer sk-secret123token456"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+        let _ = client.get("/secret-error").await;
+
+        // The raw token must NEVER appear in logs
+        logs_assert(|lines: &[&str]| {
+            let has_secret = lines.iter().any(|line| line.contains("sk-secret123"));
+            if has_secret {
+                Err(format!(
+                    "SECURITY: Sensitive token found in logs!\nLogs:\n{}",
+                    lines.join("\n")
+                ))
+            } else {
+                Ok(())
+            }
+        });
     }
 }

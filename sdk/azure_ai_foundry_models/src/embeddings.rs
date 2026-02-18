@@ -145,12 +145,31 @@ pub struct EmbeddingUsage {
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Tracing
+///
+/// This function emits a span named `foundry::embeddings::embed` with the following fields:
+/// - `model`: The model being used for embedding generation
+/// - `input_count`: Number of inputs being embedded
+/// - `prompt_tokens`: Number of tokens in the input (recorded after response)
+#[tracing::instrument(
+    name = "foundry::embeddings::embed",
+    skip(client, request),
+    fields(model = %request.model, input_count = request.input_count(), prompt_tokens)
+)]
 pub async fn embed(
     client: &FoundryClient,
     request: &EmbeddingRequest,
 ) -> FoundryResult<EmbeddingResponse> {
+    tracing::debug!("sending embedding request");
+
     let response = client.post("/openai/v1/embeddings", request).await?;
     let body = response.json::<EmbeddingResponse>().await?;
+
+    // Record token usage in the span
+    let span = tracing::Span::current();
+    span.record("prompt_tokens", body.usage.prompt_tokens);
+
     Ok(body)
 }
 
@@ -164,6 +183,16 @@ pub struct EmbeddingRequestBuilder {
 }
 
 impl EmbeddingRequest {
+    /// Returns the number of inputs in this request.
+    ///
+    /// Used for tracing instrumentation.
+    fn input_count(&self) -> usize {
+        match &self.input {
+            EmbeddingInput::Single(_) => 1,
+            EmbeddingInput::Multiple(v) => v.len(),
+        }
+    }
+
     /// Create a new builder.
     pub fn builder() -> EmbeddingRequestBuilder {
         EmbeddingRequestBuilder {
@@ -264,6 +293,7 @@ impl EmbeddingRequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
 
     // --- Ciclo 1: Builder with required fields only ---
 
@@ -737,5 +767,47 @@ mod tests {
             EmbeddingInput::Multiple(v) => assert_eq!(v.len(), 3),
             _ => panic!("Expected Multiple"),
         }
+    }
+
+    // --- Tracing Instrumentation Tests ---
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_embed_emits_embeddings_span() {
+        use crate::test_utils::setup_mock_client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        let response_body = serde_json::json!({
+            "object": "list",
+            "model": "text-embedding-ada-002",
+            "data": [{
+                "index": 0,
+                "embedding": [0.1, 0.2, 0.3]
+            }],
+            "usage": {
+                "prompt_tokens": 5,
+                "total_tokens": 5
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/embeddings"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = EmbeddingRequest::builder()
+            .model("text-embedding-ada-002")
+            .input("Hello")
+            .build();
+
+        let _ = embed(&client, &request).await;
+
+        assert!(logs_contain("foundry::embeddings::embed"));
     }
 }

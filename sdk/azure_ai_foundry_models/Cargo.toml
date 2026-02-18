@@ -23,3 +23,4 @@ memchr = "2"
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock.workspace = true
+tracing-test = "0.2"
