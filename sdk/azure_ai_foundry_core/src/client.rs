@@ -92,10 +92,16 @@ pub fn is_retriable_status(status: u16) -> bool {
     matches!(status, 429 | 500 | 502 | 503 | 504)
 }
 
+/// Maximum backoff duration to prevent excessive waits (60 seconds).
+pub const MAX_BACKOFF: Duration = Duration::from_secs(60);
+
 /// Compute backoff duration with jitter for retry attempts.
 ///
 /// Calculates exponential backoff (2^attempt * initial_backoff) with ±25% jitter
 /// to prevent thundering herd problems when multiple clients retry simultaneously.
+///
+/// The backoff is capped at [`MAX_BACKOFF`] (60 seconds) to prevent excessive waits.
+/// Uses saturating arithmetic to prevent overflow with large attempt values.
 ///
 /// # Arguments
 ///
@@ -104,10 +110,14 @@ pub fn is_retriable_status(status: u16) -> bool {
 ///
 /// # Returns
 ///
-/// The computed backoff duration with jitter applied
+/// The computed backoff duration with jitter applied, capped at 60 seconds.
 #[inline]
 fn compute_backoff(attempt: u32, initial_backoff: Duration) -> Duration {
-    let base_backoff = initial_backoff * 2_u32.pow(attempt);
+    // Clamp exponent to prevent u32 overflow (2^31 overflows u32)
+    let exponent = attempt.min(30);
+    let multiplier = 2_u32.saturating_pow(exponent);
+    // Use saturating_mul to prevent Duration overflow, then cap at MAX_BACKOFF
+    let base_backoff = initial_backoff.saturating_mul(multiplier).min(MAX_BACKOFF);
     let jitter = 0.75 + fastrand::f64() * 0.5; // 0.75 to 1.25
     base_backoff.mul_f64(jitter)
 }
@@ -1834,5 +1844,46 @@ mod tests {
                 Ok(())
             }
         });
+    }
+
+    // --- compute_backoff tests ---
+
+    #[test]
+    fn test_compute_backoff_attempt_zero() {
+        let backoff = compute_backoff(0, Duration::from_millis(500));
+        // With jitter 0.75-1.25: range 375ms - 625ms (2^0 = 1)
+        assert!(backoff >= Duration::from_millis(375));
+        assert!(backoff <= Duration::from_millis(625));
+    }
+
+    #[test]
+    fn test_compute_backoff_attempt_one() {
+        let backoff = compute_backoff(1, Duration::from_millis(500));
+        // With jitter 0.75-1.25: range 750ms - 1250ms (2^1 = 2)
+        assert!(backoff >= Duration::from_millis(750));
+        assert!(backoff <= Duration::from_millis(1250));
+    }
+
+    #[test]
+    fn test_compute_backoff_large_attempt_does_not_overflow() {
+        // Should not panic even with large attempt values
+        let backoff = compute_backoff(100, Duration::from_millis(500));
+        // Should be capped at MAX_BACKOFF (60 seconds) with jitter
+        assert!(backoff <= Duration::from_secs(75)); // MAX_BACKOFF * 1.25 jitter
+    }
+
+    #[test]
+    fn test_compute_backoff_capped_at_max() {
+        // With initial_backoff = 10s and attempt = 10, base would be 10240s
+        // Should be capped at MAX_BACKOFF (60s)
+        let backoff = compute_backoff(10, Duration::from_secs(10));
+        assert!(backoff <= Duration::from_secs(75)); // MAX_BACKOFF * 1.25 jitter
+        assert!(backoff >= Duration::from_secs(45)); // MAX_BACKOFF * 0.75 jitter
+    }
+
+    #[test]
+    fn test_compute_backoff_zero_initial() {
+        let backoff = compute_backoff(5, Duration::ZERO);
+        assert_eq!(backoff, Duration::ZERO);
     }
 }

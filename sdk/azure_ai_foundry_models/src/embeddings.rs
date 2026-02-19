@@ -264,6 +264,22 @@ impl EmbeddingRequestBuilder {
             .input
             .ok_or_else(|| FoundryError::Builder("input is required".into()))?;
 
+        // Validate input is not empty
+        match &input {
+            EmbeddingInput::Single(s) if s.is_empty() => {
+                return Err(FoundryError::Builder("input cannot be empty".into()));
+            }
+            EmbeddingInput::Multiple(v) if v.is_empty() => {
+                return Err(FoundryError::Builder("inputs cannot be empty".into()));
+            }
+            EmbeddingInput::Multiple(v) if v.iter().any(|s| s.is_empty()) => {
+                return Err(FoundryError::Builder(
+                    "inputs cannot contain empty strings".into(),
+                ));
+            }
+            _ => {}
+        }
+
         // Validate dimensions (must be > 0)
         if let Some(dims) = self.dimensions {
             if dims == 0 {
@@ -724,6 +740,42 @@ mod tests {
         assert!(result.is_ok());
         let request = result.unwrap();
         assert_eq!(request.dimensions, Some(512));
+    }
+
+    #[test]
+    fn test_embedding_builder_rejects_empty_input() {
+        let result = EmbeddingRequest::builder()
+            .model("text-embedding-ada-002")
+            .input("")
+            .try_build();
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("input cannot be empty"));
+    }
+
+    #[test]
+    fn test_embedding_builder_rejects_empty_inputs_vec() {
+        let result = EmbeddingRequest::builder()
+            .model("text-embedding-ada-002")
+            .inputs(Vec::<String>::new())
+            .try_build();
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("inputs cannot be empty"));
+    }
+
+    #[test]
+    fn test_embedding_builder_rejects_inputs_with_empty_string() {
+        let result = EmbeddingRequest::builder()
+            .model("text-embedding-ada-002")
+            .inputs(vec!["hello", ""])
+            .try_build();
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("inputs cannot contain empty strings"));
     }
 
     #[test]

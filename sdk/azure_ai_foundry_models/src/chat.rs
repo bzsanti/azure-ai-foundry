@@ -157,6 +157,13 @@ impl ChatCompletionRequestBuilder {
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
 
+        // Validate at least one message is present
+        if self.messages.is_empty() {
+            return Err(FoundryError::Builder(
+                "at least one message is required".into(),
+            ));
+        }
+
         // Validate temperature (0.0 - 2.0)
         if let Some(temp) = self.temperature {
             if !(0.0..=2.0).contains(&temp) {
@@ -755,6 +762,20 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "at least one message is required")]
+    fn builder_without_messages_panics() {
+        ChatCompletionRequest::builder().model("gpt-4o").build();
+    }
+
+    #[test]
+    fn try_build_returns_error_when_messages_empty() {
+        let result = ChatCompletionRequest::builder().model("gpt-4o").try_build();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("at least one message is required"));
+    }
+
+    #[test]
     fn try_build_returns_error_when_model_missing() {
         let result = ChatCompletionRequest::builder()
             .message(Message::user("Hello"))
@@ -788,6 +809,7 @@ mod tests {
         // Temperature must be between 0.0 and 2.0
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .temperature(3.0) // Invalid: > 2.0
             .try_build();
 
@@ -809,6 +831,7 @@ mod tests {
         // Temperature must be between 0.0 and 2.0
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .temperature(-0.5) // Invalid: < 0.0
             .try_build();
 
@@ -825,6 +848,7 @@ mod tests {
         // top_p must be between 0.0 and 1.0
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .top_p(1.5) // Invalid: > 1.0
             .try_build();
 
@@ -845,6 +869,7 @@ mod tests {
     fn test_builder_rejects_negative_top_p() {
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .top_p(-0.1) // Invalid: < 0.0
             .try_build();
 
@@ -856,6 +881,7 @@ mod tests {
         // presence_penalty must be between -2.0 and 2.0
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .presence_penalty(-3.0) // Invalid: < -2.0
             .try_build();
 
@@ -877,6 +903,7 @@ mod tests {
         // frequency_penalty must be between -2.0 and 2.0
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .frequency_penalty(5.0) // Invalid: > 2.0
             .try_build();
 
@@ -918,6 +945,7 @@ mod tests {
         // Edge cases: exact boundary values
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .temperature(0.0)
             .top_p(1.0)
             .presence_penalty(-2.0)
