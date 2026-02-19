@@ -129,7 +129,7 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-02-18)
+## Session Status (2026-02-19)
 
 **Branch:** `develop/v0.3.0`
 
@@ -140,11 +140,31 @@ Published to crates.io:
 - https://crates.io/crates/azure_ai_foundry_core/0.2.0
 - https://crates.io/crates/azure_ai_foundry_models/0.2.0
 
-**v0.3.0 Status:** IN PROGRESS
+**v0.3.0 Status:** IN PROGRESS (Quality Fixes Complete)
 
 **Completed Features v0.3.0:**
-- ✅ Tracing instrumentation (see below)
+- ✅ Tracing instrumentation
 - ✅ README updated for v0.2.0 release
+- ✅ FoundryClient fields made private (encapsulation)
+- ✅ Comprehensive quality fixes (see below)
+
+**Quality Fixes v0.3.0 (13 of 13 implemented):**
+
+| # | Fix | Status |
+|---|-----|--------|
+| 1 | AzureSdk error preserves source chain | ✅ Complete |
+| 2 | extract_retry_after_delay() helper | ✅ Complete |
+| 3 | Retry loop respects Retry-After header | ✅ Complete |
+| 4 | JWT + api-key: sanitization in errors | ✅ Complete |
+| 5 | build() propagates errors (no panic) | ✅ Complete |
+| 6 | RetryPolicy::new() with validation | ✅ Complete |
+| 7 | Token refresh inside retry loop | ✅ Complete |
+| 8 | get_token() → fetch_fresh_token() (deprecated) | ✅ Complete |
+| 9 | EmbeddingUsage unified with core Usage | ✅ Complete |
+| 10 | Doc comments for ChatCompletionRequestBuilder | ✅ Complete |
+| 11 | DEFAULT_API_VERSION documented as preview | ✅ Complete |
+| 12 | Usage struct fields documented | ✅ Complete |
+| 13 | FoundryClient fields made private | ✅ Complete |
 
 **Tracing Instrumentation (complete):**
 
@@ -158,18 +178,15 @@ Published to crates.io:
 | `foundry::chat::complete_stream` | model |
 | `foundry::embeddings::embed` | model, input_count, prompt_tokens |
 
-Additional improvements:
-- Refactored `compute_backoff()` helper (eliminated code duplication)
-- Security test: verify error events don't leak bearer tokens
-
-Deferred to future:
-- Trace-level SSE chunk events
-- Token cache hit/miss events
+**Breaking Changes v0.3.0:**
+- `get_token()` deprecated → use `fetch_fresh_token()`
+- `EmbeddingUsage` removed → use `Usage` from core
+- `AzureSdk` variant changed from `(String)` to `{ message, source }`
 
 **Next Steps (v0.3.0):**
 - `azure_ai_foundry_agents` crate (Agent Service)
 - `azure_ai_foundry_tools` crate (Vision, Document Intelligence)
 
 **Test Summary:**
-- 169 tests passing (85 core + 68 models + 16 doc-tests)
+- 195 tests passing (105 core + 73 models + 17 doc-tests)
 - All clippy checks passing (0 warnings)
