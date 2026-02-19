@@ -150,12 +150,12 @@ impl Default for RetryPolicy {
 /// The client is cheaply cloneable and can be shared across threads.
 #[derive(Debug, Clone)]
 pub struct FoundryClient {
-    pub(crate) http: HttpClient,
-    pub(crate) endpoint: Url,
-    pub(crate) credential: FoundryCredential,
-    pub(crate) api_version: String,
-    pub(crate) retry_policy: RetryPolicy,
-    pub(crate) streaming_timeout: Duration,
+    http: HttpClient,
+    endpoint: Url,
+    credential: FoundryCredential,
+    api_version: String,
+    retry_policy: RetryPolicy,
+    streaming_timeout: Duration,
 }
 
 /// Builder for constructing a [`FoundryClient`].
@@ -1885,5 +1885,28 @@ mod tests {
     fn test_compute_backoff_zero_initial() {
         let backoff = compute_backoff(5, Duration::ZERO);
         assert_eq!(backoff, Duration::ZERO);
+    }
+
+    // --- Encapsulation Tests ---
+
+    /// Verifies that FoundryClient works correctly using only its public API.
+    /// The internal fields (http, credential) should not need to be accessed directly.
+    #[test]
+    fn client_internals_are_encapsulated() {
+        let client = FoundryClient::builder()
+            .endpoint("https://test.services.ai.azure.com")
+            .credential(FoundryCredential::api_key("test"))
+            .build()
+            .expect("should build");
+
+        // All functionality is available through the public API
+        assert!(client.url("/test").is_ok());
+        assert_eq!(client.api_version(), DEFAULT_API_VERSION);
+        assert_eq!(client.retry_policy().max_retries, 3);
+        assert_eq!(client.streaming_timeout(), DEFAULT_STREAMING_TIMEOUT);
+        assert_eq!(
+            client.endpoint().as_str(),
+            "https://test.services.ai.azure.com/"
+        );
     }
 }
