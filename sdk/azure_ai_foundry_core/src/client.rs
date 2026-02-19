@@ -122,6 +122,27 @@ fn compute_backoff(attempt: u32, initial_backoff: Duration) -> Duration {
     base_backoff.mul_f64(jitter)
 }
 
+/// Extract the retry delay from a `Retry-After` header if present.
+///
+/// Parses the `Retry-After` header value as seconds and returns the duration,
+/// capped at [`MAX_BACKOFF`] to prevent excessive waits.
+///
+/// # Arguments
+///
+/// * `headers` - The HTTP response headers
+///
+/// # Returns
+///
+/// `Some(Duration)` if a valid `Retry-After` header is present, `None` otherwise.
+#[inline]
+fn extract_retry_after_delay(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|secs| Duration::from_secs(secs).min(MAX_BACKOFF))
+}
+
 /// Configuration for automatic retry behavior on transient errors.
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -138,6 +159,53 @@ impl Default for RetryPolicy {
             max_retries: 3,
             initial_backoff: Duration::from_millis(500),
         }
+    }
+}
+
+impl RetryPolicy {
+    /// Maximum allowed value for `max_retries` to prevent excessive retries.
+    pub const MAX_ALLOWED_RETRIES: u32 = 10;
+
+    /// Construct a validated `RetryPolicy`.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_retries` - Maximum number of retry attempts (must be <= 10)
+    /// * `initial_backoff` - Initial backoff duration (must be <= [`MAX_BACKOFF`])
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `max_retries` exceeds [`Self::MAX_ALLOWED_RETRIES`] (10)
+    /// - `initial_backoff` exceeds [`MAX_BACKOFF`] (60 seconds)
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use azure_ai_foundry_core::client::RetryPolicy;
+    /// use std::time::Duration;
+    ///
+    /// let policy = RetryPolicy::new(5, Duration::from_secs(1)).expect("valid policy");
+    /// assert_eq!(policy.max_retries, 5);
+    /// ```
+    pub fn new(max_retries: u32, initial_backoff: Duration) -> FoundryResult<Self> {
+        if max_retries > Self::MAX_ALLOWED_RETRIES {
+            return Err(FoundryError::Builder(format!(
+                "max_retries must be <= {}, got {}",
+                Self::MAX_ALLOWED_RETRIES,
+                max_retries
+            )));
+        }
+        if initial_backoff > MAX_BACKOFF {
+            return Err(FoundryError::Builder(format!(
+                "initial_backoff must be <= {:?}, got {:?}",
+                MAX_BACKOFF, initial_backoff
+            )));
+        }
+        Ok(Self {
+            max_retries,
+            initial_backoff,
+        })
     }
 }
 
@@ -243,11 +311,14 @@ impl FoundryClient {
     )]
     pub async fn get(&self, path: &str) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
-        let auth = self.credential.resolve().await?;
 
         for attempt in 0..=self.retry_policy.max_retries {
             let span = tracing::Span::current();
             span.record("attempt", attempt);
+
+            // Resolve credential on each attempt to handle token expiration during retries.
+            // The internal cache ensures this is O(1) when the token is still valid.
+            let auth = self.credential.resolve().await?;
 
             tracing::debug!("sending GET request");
 
@@ -274,7 +345,9 @@ impl FoundryClient {
 
             tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
 
-            let backoff = compute_backoff(attempt, self.retry_policy.initial_backoff);
+            // Respect Retry-After header if present; otherwise use exponential backoff
+            let backoff = extract_retry_after_delay(response.headers())
+                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
             tokio::time::sleep(backoff).await;
         }
 
@@ -314,11 +387,14 @@ impl FoundryClient {
         body: &T,
     ) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
-        let auth = self.credential.resolve().await?;
 
         for attempt in 0..=self.retry_policy.max_retries {
             let span = tracing::Span::current();
             span.record("attempt", attempt);
+
+            // Resolve credential on each attempt to handle token expiration during retries.
+            // The internal cache ensures this is O(1) when the token is still valid.
+            let auth = self.credential.resolve().await?;
 
             tracing::debug!("sending POST request");
 
@@ -346,7 +422,9 @@ impl FoundryClient {
 
             tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
 
-            let backoff = compute_backoff(attempt, self.retry_policy.initial_backoff);
+            // Respect Retry-After header if present; otherwise use exponential backoff
+            let backoff = extract_retry_after_delay(response.headers())
+                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
             tokio::time::sleep(backoff).await;
         }
 
@@ -387,13 +465,16 @@ impl FoundryClient {
         body: &T,
     ) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
-        let auth = self.credential.resolve().await?;
 
         // Retry loop for pre-stream errors only (connection errors and retriable status codes)
         // Once we receive a success response, the stream starts and we cannot retry.
         for attempt in 0..=self.retry_policy.max_retries {
             let span = tracing::Span::current();
             span.record("attempt", attempt);
+
+            // Resolve credential on each attempt to handle token expiration during retries.
+            // The internal cache ensures this is O(1) when the token is still valid.
+            let auth = self.credential.resolve().await?;
 
             tracing::debug!("sending POST request for streaming");
 
@@ -424,7 +505,9 @@ impl FoundryClient {
 
             tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
 
-            let backoff = compute_backoff(attempt, self.retry_policy.initial_backoff);
+            // Respect Retry-After header if present; otherwise use exponential backoff
+            let backoff = extract_retry_after_delay(response.headers())
+                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
             tokio::time::sleep(backoff).await;
         }
 
@@ -491,6 +574,95 @@ impl FoundryClient {
                     search_start = sk_pos + 10; // "[REDACTED]" is 10 chars
                 } else {
                     search_start = sk_pos + 3;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Sanitize JWT tokens (Entra ID tokens starting with "eyJ")
+        // JWTs always start with "eyJ" because the header {"alg":...} encodes to this prefix
+        search_start = 0;
+        while search_start < result.len() {
+            if let Some(relative_pos) = result[search_start..].find("eyJ") {
+                let jwt_pos = search_start + relative_pos;
+                // JWT tokens contain alphanumeric chars, dots, underscores, and hyphens (base64url + separators)
+                let jwt_end = result[jwt_pos..]
+                    .find(|c: char| {
+                        c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ')'
+                    })
+                    .map(|pos| jwt_pos + pos)
+                    .unwrap_or(result.len());
+
+                if jwt_end > jwt_pos + 3 {
+                    result.replace_range(jwt_pos..jwt_end, "[REDACTED]");
+                    search_start = jwt_pos + 10;
+                } else {
+                    search_start = jwt_pos + 3;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Sanitize api-key: pattern (Azure style)
+        search_start = 0;
+        while search_start < result.len() {
+            // Case-insensitive search for "api-key:"
+            let lower = result[search_start..].to_lowercase();
+            if let Some(relative_pos) = lower.find("api-key:") {
+                let key_pos = search_start + relative_pos + 8; // "api-key:" is 8 chars
+                // Skip any whitespace after the colon
+                let value_start = result[key_pos..]
+                    .find(|c: char| !c.is_whitespace())
+                    .map(|pos| key_pos + pos)
+                    .unwrap_or(result.len());
+
+                if value_start < result.len() {
+                    let value_end = result[value_start..]
+                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
+                        .map(|pos| value_start + pos)
+                        .unwrap_or(result.len());
+
+                    if value_end > value_start {
+                        result.replace_range(value_start..value_end, "[REDACTED]");
+                        search_start = value_start + 10;
+                    } else {
+                        search_start = value_start;
+                    }
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+
+        // Sanitize Ocp-Apim-Subscription-Key: pattern (Azure API Management)
+        search_start = 0;
+        while search_start < result.len() {
+            let lower = result[search_start..].to_lowercase();
+            if let Some(relative_pos) = lower.find("ocp-apim-subscription-key:") {
+                let key_pos = search_start + relative_pos + 26; // header is 26 chars
+                let value_start = result[key_pos..]
+                    .find(|c: char| !c.is_whitespace())
+                    .map(|pos| key_pos + pos)
+                    .unwrap_or(result.len());
+
+                if value_start < result.len() {
+                    let value_end = result[value_start..]
+                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
+                        .map(|pos| value_start + pos)
+                        .unwrap_or(result.len());
+
+                    if value_end > value_start {
+                        result.replace_range(value_start..value_end, "[REDACTED]");
+                        search_start = value_start + 10;
+                    } else {
+                        search_start = value_start;
+                    }
+                } else {
+                    break;
                 }
             } else {
                 break;
@@ -645,9 +817,12 @@ impl FoundryClientBuilder {
     /// - No endpoint is provided and `AZURE_AI_FOUNDRY_ENDPOINT` is not set
     /// - The endpoint URL is invalid
     /// - Credential creation fails (when using environment-based credentials)
+    /// - HTTP client construction fails (rare, typically due to TLS issues)
     pub fn build(self) -> FoundryResult<FoundryClient> {
         // Build HTTP client first using timeout configuration
-        let http = self.http_client.unwrap_or_else(|| {
+        let http = if let Some(client) = self.http_client {
+            client
+        } else {
             let connect_timeout = self.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT);
             let read_timeout = self.read_timeout.unwrap_or(DEFAULT_READ_TIMEOUT);
 
@@ -655,8 +830,8 @@ impl FoundryClientBuilder {
                 .connect_timeout(connect_timeout)
                 .timeout(read_timeout)
                 .build()
-                .expect("failed to build HTTP client")
-        });
+                .map_err(|e| FoundryError::Builder(format!("failed to build HTTP client: {}", e)))?
+        };
 
         let endpoint_str = self
             .endpoint
@@ -1371,6 +1546,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn retry_policy_new_accepts_valid_values() {
+        let policy = RetryPolicy::new(5, Duration::from_secs(1)).expect("should be valid");
+        assert_eq!(policy.max_retries, 5);
+        assert_eq!(policy.initial_backoff, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn retry_policy_new_accepts_zero_backoff() {
+        // Zero backoff is valid (useful in tests)
+        let policy = RetryPolicy::new(3, Duration::ZERO).expect("should be valid");
+        assert_eq!(policy.initial_backoff, Duration::ZERO);
+    }
+
+    #[test]
+    fn retry_policy_new_rejects_excessive_retries() {
+        let result = RetryPolicy::new(11, Duration::from_millis(500));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("max_retries"));
+    }
+
+    #[test]
+    fn retry_policy_new_rejects_excessive_backoff() {
+        // initial_backoff > MAX_BACKOFF (60s) should fail
+        let result = RetryPolicy::new(3, Duration::from_secs(120));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("initial_backoff"));
+    }
+
     #[tokio::test]
     async fn get_retries_on_503_with_backoff() {
         use std::sync::atomic::{AtomicU32, Ordering};
@@ -1627,6 +1833,57 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn get_respects_retry_after_header() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let server = MockServer::start().await;
+        let request_count = Arc::new(AtomicU32::new(0));
+        let counter = request_count.clone();
+
+        Mock::given(method("GET"))
+            .and(path("/retry-after-test"))
+            .respond_with(move |_req: &wiremock::Request| {
+                let count = counter.fetch_add(1, Ordering::SeqCst);
+                if count == 0 {
+                    ResponseTemplate::new(429)
+                        .set_body_string("Rate limited")
+                        .insert_header("Retry-After", "1") // Server asks to wait 1 second
+                } else {
+                    ResponseTemplate::new(200).set_body_string("OK")
+                }
+            })
+            .mount(&server)
+            .await;
+
+        let policy = RetryPolicy {
+            max_retries: 3,
+            initial_backoff: Duration::from_millis(10), // Much smaller than Retry-After
+        };
+
+        let client = FoundryClient::builder()
+            .endpoint(server.uri())
+            .credential(FoundryCredential::api_key("test"))
+            .retry_policy(policy)
+            .build()
+            .expect("should build");
+
+        let start = Instant::now();
+        let result = client.get("/retry-after-test").await;
+        let elapsed = start.elapsed();
+
+        assert!(result.is_ok());
+        // Must have waited at least 1 second (Retry-After from server),
+        // not just 10ms from initial_backoff
+        assert!(
+            elapsed >= Duration::from_millis(900),
+            "Should have waited for Retry-After (1s), but waited only {:?}",
+            elapsed
+        );
+    }
+
     // --- Error Sanitization Tests (Mejora 2: Security) ---
 
     #[tokio::test]
@@ -1749,6 +2006,54 @@ mod tests {
             result.matches("[REDACTED]").count(),
             2,
             "Should have two redaction markers"
+        );
+    }
+
+    #[test]
+    fn sanitize_jwt_tokens_in_error_messages() {
+        // A real JWT has 3 parts separated by dots, all in base64url
+        let jwt = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyMTIzIiwiZXhwIjoxNzAwMDAwMDAwfQ.signature123";
+        let msg = format!("Token validation failed: {}", jwt);
+        let result = FoundryClient::sanitize_error_message(&msg);
+        assert!(
+            !result.contains("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"),
+            "JWT header should be redacted"
+        );
+        assert!(
+            result.contains("[REDACTED]"),
+            "Should contain redaction marker"
+        );
+    }
+
+    #[test]
+    fn sanitize_partial_jwt_eyj_prefix() {
+        let msg = "Invalid token eyJhbGci.payload.sig in request";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(!result.contains("eyJhbGci"), "Partial JWT should be redacted");
+    }
+
+    #[test]
+    fn sanitize_api_key_header_pattern() {
+        let msg = "Request failed with api-key: abc123secret456 - invalid key";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("abc123secret456"),
+            "api-key value should be redacted"
+        );
+        assert!(
+            result.contains("[REDACTED]"),
+            "Should contain redaction marker"
+        );
+    }
+
+    #[test]
+    fn sanitize_ocp_apim_subscription_key_header() {
+        // Alternative header used by some Azure services
+        let msg = "Ocp-Apim-Subscription-Key: deadbeef1234 was invalid";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("deadbeef1234"),
+            "Subscription key should be redacted"
         );
     }
 
@@ -1885,6 +2190,43 @@ mod tests {
     fn test_compute_backoff_zero_initial() {
         let backoff = compute_backoff(5, Duration::ZERO);
         assert_eq!(backoff, Duration::ZERO);
+    }
+
+    // --- Retry-After Header Tests ---
+
+    #[test]
+    fn extract_retry_delay_from_seconds_header() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("30"));
+        let delay = extract_retry_after_delay(&headers);
+        assert_eq!(delay, Some(Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn extract_retry_delay_missing_header() {
+        let headers = reqwest::header::HeaderMap::new();
+        let delay = extract_retry_after_delay(&headers);
+        assert_eq!(delay, None);
+    }
+
+    #[test]
+    fn extract_retry_delay_capped_at_max_backoff() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("3600")); // 1 hour
+        let delay = extract_retry_after_delay(&headers);
+        // Must respect MAX_BACKOFF as upper bound
+        assert_eq!(delay, Some(MAX_BACKOFF));
+    }
+
+    #[test]
+    fn extract_retry_delay_invalid_value_returns_none() {
+        use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("not-a-number"));
+        let delay = extract_retry_after_delay(&headers);
+        assert_eq!(delay, None);
     }
 
     // --- Encapsulation Tests ---

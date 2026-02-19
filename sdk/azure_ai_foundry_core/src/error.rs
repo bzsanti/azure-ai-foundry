@@ -53,8 +53,12 @@ pub enum FoundryError {
     },
 
     /// An error from the Azure SDK.
-    #[error("Azure SDK error: {0}")]
-    AzureSdk(String),
+    #[error("Azure SDK error: {message}")]
+    AzureSdk {
+        message: String,
+        #[source]
+        source: azure_core::Error,
+    },
 
     /// A required builder field is missing.
     #[error("Builder error: {0}")]
@@ -63,7 +67,10 @@ pub enum FoundryError {
 
 impl From<azure_core::Error> for FoundryError {
     fn from(err: azure_core::Error) -> Self {
-        Self::AzureSdk(err.to_string())
+        Self::AzureSdk {
+            message: err.to_string(),
+            source: err,
+        }
     }
 }
 
@@ -201,7 +208,11 @@ mod tests {
 
     #[test]
     fn azure_sdk_error_display() {
-        let err = FoundryError::AzureSdk("credential error".into());
+        let azure_err = azure_core::Error::with_message(
+            azure_core::error::ErrorKind::Credential,
+            "credential error",
+        );
+        let err: FoundryError = azure_err.into();
         assert_eq!(err.to_string(), "Azure SDK error: credential error");
     }
 
@@ -212,8 +223,30 @@ mod tests {
             "token expired",
         );
         let foundry_err: FoundryError = azure_err.into();
-        assert!(matches!(foundry_err, FoundryError::AzureSdk(_)));
+        assert!(matches!(foundry_err, FoundryError::AzureSdk { .. }));
         assert!(foundry_err.to_string().contains("token expired"));
+    }
+
+    #[test]
+    fn azure_sdk_error_preserves_source() {
+        use std::error::Error;
+
+        let azure_err = azure_core::Error::with_message(
+            azure_core::error::ErrorKind::Credential,
+            "token expired",
+        );
+        let foundry_err: FoundryError = azure_err.into();
+
+        // source() must NOT be None - this is the critical assertion
+        assert!(
+            foundry_err.source().is_some(),
+            "AzureSdk must preserve source chain"
+        );
+        assert!(foundry_err
+            .source()
+            .unwrap()
+            .to_string()
+            .contains("token expired"));
     }
 
     #[test]
@@ -387,8 +420,12 @@ mod tests {
         let builder = FoundryError::Builder("model is required".into());
         assert_eq!(builder.to_string(), "Builder error: model is required");
 
-        // AzureSdk format unchanged (not modified)
-        let sdk = FoundryError::AzureSdk("credential error".into());
+        // AzureSdk format unchanged
+        let azure_err = azure_core::Error::with_message(
+            azure_core::error::ErrorKind::Credential,
+            "credential error",
+        );
+        let sdk: FoundryError = azure_err.into();
         assert_eq!(sdk.to_string(), "Azure SDK error: credential error");
     }
 }
