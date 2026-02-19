@@ -65,6 +65,13 @@ use url::Url;
 use std::time::Duration;
 
 /// Default API version for Azure AI Foundry.
+///
+/// # Warning
+///
+/// This is a **preview** API version (`-preview` suffix). Preview APIs may change
+/// without notice and are not covered by SLA guarantees. For production use,
+/// consider pinning to a stable version via
+/// [`FoundryClientBuilder::api_version`](FoundryClientBuilder::api_version).
 pub const DEFAULT_API_VERSION: &str = "2025-01-01-preview";
 
 /// Default connection timeout (10 seconds).

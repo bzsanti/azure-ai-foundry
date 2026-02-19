@@ -105,46 +105,75 @@ impl ChatCompletionRequest {
 }
 
 impl ChatCompletionRequestBuilder {
+    /// Set the model ID to use for the completion.
+    ///
+    /// **Required.** Example values: `"gpt-4o"`, `"gpt-4o-mini"`.
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
         self
     }
 
+    /// Add a single message to the conversation.
+    ///
+    /// Messages are appended in order. Use [`messages`](Self::messages) to add multiple at once.
     pub fn message(mut self, message: Message) -> Self {
         self.messages.push(message);
         self
     }
 
+    /// Add multiple messages to the conversation.
+    ///
+    /// Accepts any type implementing `IntoIterator<Item = Message>`.
     pub fn messages(mut self, messages: impl IntoIterator<Item = Message>) -> Self {
         self.messages.extend(messages);
         self
     }
 
+    /// Set the sampling temperature (0.0 to 2.0).
+    ///
+    /// Higher values make output more random, lower values more deterministic.
+    /// Defaults to the model's default if not set.
     pub fn temperature(mut self, temp: f32) -> Self {
         self.temperature = Some(temp);
         self
     }
 
+    /// Set the nucleus sampling parameter (0.0 to 1.0).
+    ///
+    /// Controls diversity via nucleus sampling: 0.1 means only tokens comprising
+    /// the top 10% probability mass are considered.
     pub fn top_p(mut self, top_p: f32) -> Self {
         self.top_p = Some(top_p);
         self
     }
 
+    /// Set the maximum number of tokens to generate.
     pub fn max_tokens(mut self, max: u32) -> Self {
         self.max_tokens = Some(max);
         self
     }
 
+    /// Set stop sequences.
+    ///
+    /// The model will stop generating when it encounters any of these sequences.
     pub fn stop(mut self, stop: Vec<String>) -> Self {
         self.stop = Some(stop);
         self
     }
 
+    /// Set the presence penalty (-2.0 to 2.0).
+    ///
+    /// Positive values penalize new tokens based on whether they appear in the text so far,
+    /// increasing the model's likelihood to talk about new topics.
     pub fn presence_penalty(mut self, penalty: f32) -> Self {
         self.presence_penalty = Some(penalty);
         self
     }
 
+    /// Set the frequency penalty (-2.0 to 2.0).
+    ///
+    /// Positive values penalize new tokens based on their existing frequency in the text,
+    /// decreasing the model's likelihood to repeat the same line verbatim.
     pub fn frequency_penalty(mut self, penalty: f32) -> Self {
         self.frequency_penalty = Some(penalty);
         self

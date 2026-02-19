@@ -237,17 +237,19 @@ impl FoundryCredential {
 
     /// Get an access token for the Cognitive Services scope.
     ///
+    /// Fetch a fresh access token, bypassing the internal cache.
+    ///
     /// This is useful when you need the raw token and expiration time,
     /// for example for caching or monitoring token lifetimes.
     ///
-    /// Note: This method bypasses the internal cache and always fetches a fresh token.
-    /// Use `resolve()` for normal authentication which benefits from caching.
+    /// **Note:** This method always fetches a fresh token from the identity provider.
+    /// Use [`resolve()`](Self::resolve) for normal authentication which benefits from caching.
     ///
     /// # Errors
     ///
     /// Returns an error if this is an API key credential (use `resolve()` instead)
     /// or if token acquisition fails.
-    pub async fn get_token(&self) -> FoundryResult<AccessToken> {
+    pub async fn fetch_fresh_token(&self) -> FoundryResult<AccessToken> {
         match self {
             Self::ApiKey(_) => Err(FoundryError::auth(
                 "Cannot get token from API key credential. Use resolve() instead.",
@@ -262,9 +264,9 @@ impl FoundryCredential {
         }
     }
 
-    /// Get an access token with custom options.
+    /// Fetch a fresh access token with custom options, bypassing the internal cache.
     ///
-    /// Note: This method bypasses the internal cache and always fetches a fresh token.
+    /// **Note:** This method always fetches a fresh token from the identity provider.
     ///
     /// # Arguments
     ///
@@ -273,7 +275,7 @@ impl FoundryCredential {
     /// # Errors
     ///
     /// Returns an error if this is an API key credential or if token acquisition fails.
-    pub async fn get_token_with_options(
+    pub async fn fetch_fresh_token_with_options(
         &self,
         options: TokenRequestOptions<'_>,
     ) -> FoundryResult<AccessToken> {
@@ -289,6 +291,21 @@ impl FoundryCredential {
                     .map_err(|e| FoundryError::auth_with_source("failed to acquire token", e))
             }
         }
+    }
+
+    /// Deprecated: use [`fetch_fresh_token()`](Self::fetch_fresh_token) instead.
+    #[deprecated(since = "0.3.0", note = "Use fetch_fresh_token() instead")]
+    pub async fn get_token(&self) -> FoundryResult<AccessToken> {
+        self.fetch_fresh_token().await
+    }
+
+    /// Deprecated: use [`fetch_fresh_token_with_options()`](Self::fetch_fresh_token_with_options) instead.
+    #[deprecated(since = "0.3.0", note = "Use fetch_fresh_token_with_options() instead")]
+    pub async fn get_token_with_options(
+        &self,
+        options: TokenRequestOptions<'_>,
+    ) -> FoundryResult<AccessToken> {
+        self.fetch_fresh_token_with_options(options).await
     }
 }
 
@@ -555,9 +572,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_token_with_api_key_fails() {
+    async fn fetch_fresh_token_with_api_key_fails() {
         let cred = FoundryCredential::api_key("my-key");
-        let result = cred.get_token().await;
+        let result = cred.fetch_fresh_token().await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -566,34 +583,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_token_with_token_credential() {
+    async fn fetch_fresh_token_with_token_credential() {
         let mock = MockTokenCredential::new("access-token-123");
         let cred = FoundryCredential::token_credential(mock);
 
-        let token = cred.get_token().await.expect("should get token");
+        let token = cred.fetch_fresh_token().await.expect("should get token");
         assert_eq!(token.token.secret(), "access-token-123");
         // Token should expire in the future
         assert!(token.expires_on > azure_core::time::OffsetDateTime::now_utc());
     }
 
     #[tokio::test]
-    async fn get_token_with_options_api_key_fails() {
+    async fn fetch_fresh_token_with_options_api_key_fails() {
         let cred = FoundryCredential::api_key("my-key");
         let options = TokenRequestOptions::default();
-        let result = cred.get_token_with_options(options).await;
+        let result = cred.fetch_fresh_token_with_options(options).await;
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), FoundryError::Auth { .. }));
     }
 
     #[tokio::test]
-    async fn get_token_with_options_token_credential() {
+    async fn fetch_fresh_token_with_options_token_credential() {
         let mock = MockTokenCredential::new("token-with-options");
         let cred = FoundryCredential::token_credential(mock);
 
         let options = TokenRequestOptions::default();
         let token = cred
-            .get_token_with_options(options)
+            .fetch_fresh_token_with_options(options)
             .await
             .expect("should get token");
         assert_eq!(token.token.secret(), "token-with-options");

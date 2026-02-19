@@ -44,6 +44,7 @@
 
 use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
+use azure_ai_foundry_core::models::Usage;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -105,7 +106,11 @@ pub struct EmbeddingResponse {
     pub object: String,
     pub model: String,
     pub data: Vec<EmbeddingData>,
-    pub usage: EmbeddingUsage,
+    /// Usage statistics for the request.
+    ///
+    /// Note: `completion_tokens` will be `None` for embedding requests
+    /// since embeddings do not generate completion tokens.
+    pub usage: Usage,
 }
 
 /// A single embedding in the response.
@@ -113,13 +118,6 @@ pub struct EmbeddingResponse {
 pub struct EmbeddingData {
     pub index: u32,
     pub embedding: Vec<f32>,
-}
-
-/// Usage statistics for an embedding request.
-#[derive(Debug, Clone, Deserialize)]
-pub struct EmbeddingUsage {
-    pub prompt_tokens: u32,
-    pub total_tokens: u32,
 }
 
 // ---------------------------------------------------------------------------
