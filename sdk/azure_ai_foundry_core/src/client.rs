@@ -438,6 +438,75 @@ impl FoundryClient {
         unreachable!("retry loop should return before reaching here")
     }
 
+    /// Send a DELETE request to the API with automatic retry on transient errors.
+    ///
+    /// Automatically adds authentication headers and API version.
+    /// Retries on retriable HTTP errors (429, 500, 502, 503, 504) with exponential backoff.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The API path to request.
+    ///
+    /// # Tracing
+    ///
+    /// This method emits a span named `foundry::client::delete` with the following fields:
+    /// - `path`: The API path being requested
+    /// - `attempt`: Current retry attempt (0-indexed)
+    /// - `status_code`: HTTP status code of the response
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authentication fails, the request fails after all retries,
+    /// or the server returns a non-retriable error response.
+    #[tracing::instrument(
+        name = "foundry::client::delete",
+        skip(self),
+        fields(path = %path, attempt, status_code)
+    )]
+    pub async fn delete(&self, path: &str) -> FoundryResult<reqwest::Response> {
+        let url = self.url(path)?;
+
+        for attempt in 0..=self.retry_policy.max_retries {
+            let span = tracing::Span::current();
+            span.record("attempt", attempt);
+
+            // Resolve credential on each attempt to handle token expiration during retries.
+            let auth = self.credential.resolve().await?;
+
+            tracing::debug!("sending DELETE request");
+
+            let response = self
+                .http
+                .delete(url.clone())
+                .header("Authorization", &auth)
+                .header("api-version", &self.api_version)
+                .send()
+                .await?;
+
+            let status = response.status().as_u16();
+            span.record("status_code", status);
+
+            // Success - return response
+            if response.status().is_success() {
+                return Ok(response);
+            }
+
+            // Non-retriable error or last attempt - return error
+            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
+                return Self::check_response(response).await;
+            }
+
+            tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
+
+            // Respect Retry-After header if present; otherwise use exponential backoff
+            let backoff = extract_retry_after_delay(response.headers())
+                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
+            tokio::time::sleep(backoff).await;
+        }
+
+        unreachable!("retry loop should return before reaching here")
+    }
+
     /// Send a POST request for streaming responses.
     ///
     /// Unlike [`Self::post`], this method does not consume the response body
