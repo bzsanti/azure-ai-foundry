@@ -135,7 +135,7 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-02-20)
+## Session Status (2026-02-21)
 
 **Branch:** `develop/v0.3.0`
 
@@ -146,7 +146,7 @@ Published to crates.io:
 - https://crates.io/crates/azure_ai_foundry_core/0.2.0
 - https://crates.io/crates/azure_ai_foundry_models/0.2.0
 
-**v0.3.0 Status:** IN PROGRESS (Agents Crate Implemented)
+**v0.3.0 Status:** IN PROGRESS (Agents Crate + Security Fixes)
 
 **Completed Features v0.3.0:**
 - ✅ Tracing instrumentation
@@ -154,6 +154,9 @@ Published to crates.io:
 - ✅ FoundryClient fields made private (encapsulation)
 - ✅ Comprehensive quality fixes (13/13)
 - ✅ `azure_ai_foundry_agents` crate implemented
+- ✅ Security: Token refresh buffer increased to 120s (prevents race condition in slow networks)
+- ✅ Security: HTTPS validation in endpoint builder (HTTP only allowed for localhost)
+- ✅ Robustness: SSE parsing defensive check for empty lines
 
 **New: `azure_ai_foundry_agents` Crate:**
 
@@ -188,11 +191,14 @@ Published to crates.io:
 - `get_token()` deprecated → use `fetch_fresh_token()`
 - `EmbeddingUsage` removed → use `Usage` from core
 - `AzureSdk` variant changed from `(String)` to `{ message, source }`
+- `TOKEN_EXPIRY_BUFFER` increased from 60s to 120s for slow network safety
+- HTTPS required for endpoints (except localhost for development)
+- SSE parsing defensive check for empty/short lines
 
 **Next Steps (v0.3.0):**
-- Integration tests for agents crate
+- Integration tests for agents crate (OPTIONAL - ready for release)
 - `azure_ai_foundry_tools` crate (Vision, Document Intelligence) - moved to v0.4.0
 
 **Test Summary:**
-- 258 tests passing (105 core + 73 models + 42 agents + 38 doc-tests)
+- 270 tests passing (113 core + 77 models + 42 agents + 38 doc-tests)
 - All clippy checks passing (0 warnings)

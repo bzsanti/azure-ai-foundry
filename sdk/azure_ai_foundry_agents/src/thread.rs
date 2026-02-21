@@ -183,7 +183,10 @@ pub async fn get(client: &FoundryClient, thread_id: &str) -> FoundryResult<Threa
     skip(client),
     fields(thread_id = %thread_id)
 )]
-pub async fn delete(client: &FoundryClient, thread_id: &str) -> FoundryResult<ThreadDeletionResponse> {
+pub async fn delete(
+    client: &FoundryClient,
+    thread_id: &str,
+) -> FoundryResult<ThreadDeletionResponse> {
     tracing::debug!("deleting thread");
 
     let path = format!("/threads/{}?{}", thread_id, API_VERSION);
@@ -284,7 +287,9 @@ mod tests {
         let client = setup_mock_client(&server).await;
         let metadata = serde_json::json!({"user_id": "user123"});
 
-        let thread = create(&client, Some(metadata)).await.expect("should succeed");
+        let thread = create(&client, Some(metadata))
+            .await
+            .expect("should succeed");
 
         assert_eq!(thread.id, "thread_meta123");
         assert!(thread.metadata.is_some());
@@ -334,7 +339,9 @@ mod tests {
 
         let client = setup_mock_client(&server).await;
 
-        let result = delete(&client, "thread_abc123").await.expect("should succeed");
+        let result = delete(&client, "thread_abc123")
+            .await
+            .expect("should succeed");
 
         assert_eq!(result.id, "thread_abc123");
         assert!(result.deleted);

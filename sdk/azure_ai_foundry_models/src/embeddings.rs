@@ -748,7 +748,10 @@ mod tests {
             .try_build();
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("input cannot be empty"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("input cannot be empty"));
     }
 
     #[test]
@@ -759,7 +762,10 @@ mod tests {
             .try_build();
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("inputs cannot be empty"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("inputs cannot be empty"));
     }
 
     #[test]

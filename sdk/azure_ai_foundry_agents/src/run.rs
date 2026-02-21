@@ -179,9 +179,7 @@ impl RunCreateRequestBuilder {
             .ok_or_else(|| FoundryError::Builder("assistant_id is required".into()))?;
 
         if assistant_id.trim().is_empty() {
-            return Err(FoundryError::Builder(
-                "assistant_id cannot be empty".into(),
-            ));
+            return Err(FoundryError::Builder("assistant_id cannot be empty".into()));
         }
 
         // Validate temperature if provided

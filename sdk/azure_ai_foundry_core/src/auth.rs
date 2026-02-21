@@ -45,7 +45,11 @@ use tokio::sync::Mutex;
 
 /// Buffer time before token expiration to trigger proactive refresh.
 /// Tokens will be refreshed when they have less than this duration remaining.
-pub const TOKEN_EXPIRY_BUFFER: Duration = Duration::from_secs(60);
+///
+/// This is set to 120 seconds (2 minutes) to handle high-latency networks
+/// where a 60-second buffer might not be sufficient. The token could expire
+/// between validation and actual use if network round-trip is slow.
+pub const TOKEN_EXPIRY_BUFFER: Duration = Duration::from_secs(120);
 
 /// The scope required for Azure AI Foundry / Cognitive Services APIs.
 pub const COGNITIVE_SERVICES_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
@@ -184,7 +188,7 @@ impl FoundryCredential {
     /// For API keys, returns `Bearer <key>`.
     /// For token credentials, acquires a token for the Cognitive Services scope
     /// and returns `Bearer <token>`. Tokens are cached to avoid redundant requests,
-    /// and automatically refreshed before expiration (with a 60-second buffer).
+    /// and automatically refreshed before expiration (with a 120-second buffer).
     ///
     /// This method is thread-safe: concurrent calls will wait for a single token
     /// acquisition rather than making duplicate requests.
@@ -712,7 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_token_cache_refreshes_before_expiry() {
-        // Setup: Token that "expires" in 30 seconds, which is within the 60s buffer
+        // Setup: Token that "expires" in 30 seconds, which is within the 120s buffer
         // This should trigger a refresh even though the token hasn't technically expired
         let mock = CountingTokenCredential::new("almost-expired-token", 30);
         let cred = FoundryCredential::token_credential(mock.clone());
@@ -730,7 +734,7 @@ mod tests {
         assert_eq!(
             mock.call_count(),
             2,
-            "get_token should be called twice, token is within 60s expiry buffer"
+            "get_token should be called twice, token is within 120s expiry buffer"
         );
     }
 
@@ -847,5 +851,59 @@ mod tests {
         let _ = api_key_cred.resolve().await;
         assert!(logs_contain("credential_type"));
         assert!(logs_contain("api_key"));
+    }
+
+    // --- Token Expiry Buffer Tests (Fix 1: Prevent race condition in slow networks) ---
+
+    #[test]
+    fn test_default_token_expiry_buffer_is_120_seconds() {
+        // The buffer should be 120 seconds to handle slow networks
+        // 60 seconds was too aggressive and could cause tokens to expire
+        // before reaching the server in high-latency scenarios
+        assert_eq!(
+            TOKEN_EXPIRY_BUFFER,
+            Duration::from_secs(120),
+            "TOKEN_EXPIRY_BUFFER should be 120 seconds for slow network safety"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_token_with_90_second_expiry_refreshes_with_120_buffer() {
+        // A token expiring in 90 seconds should be refreshed because it's
+        // within the 120-second buffer window
+        let mock = CountingTokenCredential::new("short-token", 90);
+        let cred = FoundryCredential::token_credential(mock.clone());
+
+        // First call - should fetch token
+        let _ = cred.resolve().await.expect("first resolve");
+        assert_eq!(mock.call_count(), 1);
+
+        // Second call - token is within 120s buffer, should refresh
+        let _ = cred.resolve().await.expect("second resolve");
+        assert_eq!(
+            mock.call_count(),
+            2,
+            "Token with 90s expiry should be refreshed when buffer is 120s"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_token_with_180_second_expiry_uses_cache_with_120_buffer() {
+        // A token expiring in 180 seconds should NOT be refreshed
+        // because it's outside the 120-second buffer window
+        let mock = CountingTokenCredential::new("long-token", 180);
+        let cred = FoundryCredential::token_credential(mock.clone());
+
+        // First call - should fetch token
+        let _ = cred.resolve().await.expect("first resolve");
+        assert_eq!(mock.call_count(), 1);
+
+        // Second call - token is outside 120s buffer, should use cache
+        let _ = cred.resolve().await.expect("second resolve");
+        assert_eq!(
+            mock.call_count(),
+            1,
+            "Token with 180s expiry should use cache when buffer is 120s"
+        );
     }
 }

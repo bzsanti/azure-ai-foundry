@@ -466,7 +466,10 @@ pub async fn list(client: &FoundryClient) -> FoundryResult<AgentList> {
     skip(client),
     fields(agent_id = %agent_id)
 )]
-pub async fn delete(client: &FoundryClient, agent_id: &str) -> FoundryResult<AgentDeletionResponse> {
+pub async fn delete(
+    client: &FoundryClient,
+    agent_id: &str,
+) -> FoundryResult<AgentDeletionResponse> {
     tracing::debug!("deleting agent");
 
     let path = format!("/assistants/{}?{}", agent_id, API_VERSION);
@@ -790,7 +793,9 @@ mod tests {
 
         let client = setup_mock_client(&server).await;
 
-        let result = delete(&client, "asst_abc123").await.expect("should succeed");
+        let result = delete(&client, "asst_abc123")
+            .await
+            .expect("should succeed");
 
         assert_eq!(result.id, "asst_abc123");
         assert!(result.deleted);

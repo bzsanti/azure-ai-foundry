@@ -418,10 +418,7 @@ mod tests {
         assert_eq!(message.role, MessageRole::User);
         assert_eq!(message.content.len(), 1);
         assert_eq!(message.content[0].content_type, "text");
-        assert_eq!(
-            message.content[0].text.as_ref().unwrap().value,
-            "Hello!"
-        );
+        assert_eq!(message.content[0].text.as_ref().unwrap().value, "Hello!");
     }
 
     // --- Cycle 14: Create message API tests ---

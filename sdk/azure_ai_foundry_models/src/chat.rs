@@ -636,6 +636,12 @@ fn parse_sse_stream(
                     // Extract line bytes and drain from buffer
                     let line_bytes: Vec<u8> = buffer.drain(..=newline_pos).collect();
 
+                    // Skip empty lines (just newline) to prevent underflow
+                    // This is defensive: memchr guarantees at least 1 byte, but we check anyway
+                    if line_bytes.len() <= 1 {
+                        continue;
+                    }
+
                     // Convert to string only when needed (skip trailing newline)
                     let line = match std::str::from_utf8(&line_bytes[..line_bytes.len() - 1]) {
                         Ok(s) => s,
@@ -1799,6 +1805,76 @@ mod tests {
         let _ = complete(&client, &request).await;
 
         assert!(logs_contain("foundry::chat::complete"));
+    }
+
+    // --- SSE Parsing Edge Case Tests (Fix 3: Prevent panic on empty/short lines) ---
+
+    #[test]
+    fn test_sse_line_single_byte_no_panic() {
+        // A line with only a newline character should not panic
+        // After stripping the newline, we get an empty string
+        let result = super::parse_sse_line("");
+        assert!(result.is_none(), "Empty line should return None");
+    }
+
+    #[test]
+    fn test_sse_line_whitespace_only_no_panic() {
+        // Line with only whitespace should not panic
+        let result = super::parse_sse_line("   ");
+        assert!(result.is_none(), "Whitespace-only line should return None");
+    }
+
+    #[test]
+    fn test_sse_line_single_char_no_panic() {
+        // Single character line should not panic
+        let result = super::parse_sse_line("x");
+        assert!(result.is_none(), "Single char line should return None");
+    }
+
+    #[tokio::test]
+    async fn test_sse_stream_empty_lines_between_data() {
+        use futures::StreamExt;
+
+        let server = MockServer::start().await;
+
+        // SSE with many empty lines between data events (common in real streams)
+        let sse_body = concat!(
+            "\n",
+            "\n",
+            "\n",
+            "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n",
+            "\n",
+            "\n",
+            "data: [DONE]\n",
+            "\n"
+        );
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(sse_body)
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let stream = complete_stream(&client, &request)
+            .await
+            .expect("should start stream");
+
+        let chunks: Vec<_> = stream.collect().await;
+
+        // Should have exactly 1 chunk (the data event), empty lines are skipped
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].is_ok());
     }
 
     #[tokio::test]

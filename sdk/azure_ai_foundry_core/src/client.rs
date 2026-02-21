@@ -350,7 +350,11 @@ impl FoundryClient {
                 return Self::check_response(response).await;
             }
 
-            tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
+            tracing::warn!(
+                status = status,
+                attempt = attempt,
+                "retriable error, will retry"
+            );
 
             // Respect Retry-After header if present; otherwise use exponential backoff
             let backoff = extract_retry_after_delay(response.headers())
@@ -427,7 +431,11 @@ impl FoundryClient {
                 return Self::check_response(response).await;
             }
 
-            tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
+            tracing::warn!(
+                status = status,
+                attempt = attempt,
+                "retriable error, will retry"
+            );
 
             // Respect Retry-After header if present; otherwise use exponential backoff
             let backoff = extract_retry_after_delay(response.headers())
@@ -496,7 +504,11 @@ impl FoundryClient {
                 return Self::check_response(response).await;
             }
 
-            tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
+            tracing::warn!(
+                status = status,
+                attempt = attempt,
+                "retriable error, will retry"
+            );
 
             // Respect Retry-After header if present; otherwise use exponential backoff
             let backoff = extract_retry_after_delay(response.headers())
@@ -579,7 +591,11 @@ impl FoundryClient {
                 return Self::check_response(response).await;
             }
 
-            tracing::warn!(status = status, attempt = attempt, "retriable error, will retry");
+            tracing::warn!(
+                status = status,
+                attempt = attempt,
+                "retriable error, will retry"
+            );
 
             // Respect Retry-After header if present; otherwise use exponential backoff
             let backoff = extract_retry_after_delay(response.headers())
@@ -688,7 +704,7 @@ impl FoundryClient {
             let lower = result[search_start..].to_lowercase();
             if let Some(relative_pos) = lower.find("api-key:") {
                 let key_pos = search_start + relative_pos + 8; // "api-key:" is 8 chars
-                // Skip any whitespace after the colon
+                                                               // Skip any whitespace after the colon
                 let value_start = result[key_pos..]
                     .find(|c: char| !c.is_whitespace())
                     .map(|pos| key_pos + pos)
@@ -921,6 +937,19 @@ impl FoundryClientBuilder {
 
         let endpoint = Url::parse(&endpoint_str)
             .map_err(|e| FoundryError::invalid_endpoint_with_source("invalid endpoint URL", e))?;
+
+        // Security: Require HTTPS to protect credentials in transit
+        // Exception: Allow HTTP for localhost/127.0.0.1 for local development
+        let is_localhost = endpoint
+            .host_str()
+            .map(|h| h == "localhost" || h == "127.0.0.1")
+            .unwrap_or(false);
+
+        if endpoint.scheme() != "https" && !is_localhost {
+            return Err(FoundryError::invalid_endpoint(
+                "HTTPS is required for security. HTTP is only allowed for localhost/127.0.0.1.",
+            ));
+        }
 
         let credential = self
             .credential
@@ -2105,7 +2134,10 @@ mod tests {
     fn sanitize_partial_jwt_eyj_prefix() {
         let msg = "Invalid token eyJhbGci.payload.sig in request";
         let result = FoundryClient::sanitize_error_message(msg);
-        assert!(!result.contains("eyJhbGci"), "Partial JWT should be redacted");
+        assert!(
+            !result.contains("eyJhbGci"),
+            "Partial JWT should be redacted"
+        );
     }
 
     #[test]
@@ -2303,6 +2335,98 @@ mod tests {
         headers.insert(RETRY_AFTER, HeaderValue::from_static("not-a-number"));
         let delay = extract_retry_after_delay(&headers);
         assert_eq!(delay, None);
+    }
+
+    // --- HTTPS Validation Tests (Fix 2: Security) ---
+
+    #[test]
+    fn test_builder_rejects_http_endpoint() {
+        let result = FoundryClient::builder()
+            .endpoint("http://insecure.services.ai.azure.com")
+            .credential(FoundryCredential::api_key("test"))
+            .build();
+
+        assert!(result.is_err(), "HTTP endpoint should be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, FoundryError::InvalidEndpoint { .. }),
+            "Expected InvalidEndpoint error, got {:?}",
+            err
+        );
+        assert!(
+            err.to_string().to_lowercase().contains("https"),
+            "Error should mention HTTPS requirement, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_builder_accepts_https_endpoint() {
+        let result = FoundryClient::builder()
+            .endpoint("https://secure.services.ai.azure.com")
+            .credential(FoundryCredential::api_key("test"))
+            .build();
+
+        assert!(result.is_ok(), "HTTPS endpoint should be accepted");
+    }
+
+    #[test]
+    fn test_builder_allows_http_localhost() {
+        // HTTP is allowed for localhost/127.0.0.1 for local development
+        let result_localhost = FoundryClient::builder()
+            .endpoint("http://localhost:8080")
+            .credential(FoundryCredential::api_key("test"))
+            .build();
+
+        assert!(
+            result_localhost.is_ok(),
+            "HTTP localhost should be allowed for development"
+        );
+
+        let result_127 = FoundryClient::builder()
+            .endpoint("http://127.0.0.1:8080")
+            .credential(FoundryCredential::api_key("test"))
+            .build();
+
+        assert!(
+            result_127.is_ok(),
+            "HTTP 127.0.0.1 should be allowed for development"
+        );
+    }
+
+    #[test]
+    fn test_builder_rejects_http_even_with_azure_domain() {
+        // Even azure.com domains should require HTTPS
+        let result = FoundryClient::builder()
+            .endpoint("http://myresource.services.ai.azure.com")
+            .credential(FoundryCredential::api_key("test"))
+            .build();
+
+        assert!(
+            result.is_err(),
+            "HTTP should be rejected even for Azure domains"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_builder_rejects_http_from_env() {
+        // Save original value
+        let original = std::env::var("AZURE_AI_FOUNDRY_ENDPOINT").ok();
+
+        std::env::set_var("AZURE_AI_FOUNDRY_ENDPOINT", "http://insecure.example.com");
+
+        let result = FoundryClient::builder()
+            .credential(FoundryCredential::api_key("test"))
+            .build();
+
+        assert!(result.is_err(), "HTTP endpoint from env should be rejected");
+
+        // Restore original value
+        match original {
+            Some(val) => std::env::set_var("AZURE_AI_FOUNDRY_ENDPOINT", val),
+            None => std::env::remove_var("AZURE_AI_FOUNDRY_ENDPOINT"),
+        }
     }
 
     // --- Encapsulation Tests ---

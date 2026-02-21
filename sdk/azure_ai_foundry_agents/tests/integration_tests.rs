@@ -9,10 +9,10 @@
 
 #![cfg(feature = "integration-tests")]
 
-use azure_ai_foundry_agents::{agent, message, run, thread};
 use azure_ai_foundry_agents::agent::AgentCreateRequest;
 use azure_ai_foundry_agents::message::MessageCreateRequest;
 use azure_ai_foundry_agents::run::{CreateThreadAndRunRequest, RunCreateRequest, RunStatus};
+use azure_ai_foundry_agents::{agent, message, run, thread};
 use azure_ai_foundry_core::auth::FoundryCredential;
 use azure_ai_foundry_core::client::FoundryClient;
 use std::time::Duration;
@@ -47,7 +47,9 @@ async fn test_agent_lifecycle() {
         .build()
         .expect("valid request");
 
-    let created_agent = agent::create(&client, &request).await.expect("create agent");
+    let created_agent = agent::create(&client, &request)
+        .await
+        .expect("create agent");
     assert!(!created_agent.id.is_empty());
     assert_eq!(created_agent.model, model);
 
@@ -73,9 +75,7 @@ async fn test_thread_lifecycle() {
     let client = get_client();
 
     // Create a thread
-    let created_thread = thread::create(&client, None)
-        .await
-        .expect("create thread");
+    let created_thread = thread::create(&client, None).await.expect("create thread");
     assert!(!created_thread.id.is_empty());
 
     // Get the thread
@@ -96,9 +96,7 @@ async fn test_message_lifecycle() {
     let client = get_client();
 
     // Create a thread
-    let created_thread = thread::create(&client, None)
-        .await
-        .expect("create thread");
+    let created_thread = thread::create(&client, None).await.expect("create thread");
 
     // Create a message
     let msg_request = MessageCreateRequest::builder()
@@ -148,9 +146,7 @@ async fn test_run_lifecycle() {
         .expect("create agent");
 
     // Create a thread
-    let created_thread = thread::create(&client, None)
-        .await
-        .expect("create thread");
+    let created_thread = thread::create(&client, None).await.expect("create thread");
 
     // Add a message
     let msg_request = MessageCreateRequest::builder()
