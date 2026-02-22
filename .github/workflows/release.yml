@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
+  # Manual trigger for publishing new crates
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.3.0)'
+        required: true
+        type: string
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,6 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -46,12 +55,20 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
       - name: Verify version matches tag
         run: |
-          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          # Support both tag push and manual dispatch
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG_VERSION="${{ inputs.tag }}"
+            TAG_VERSION="${TAG_VERSION#v}"
+          else
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
           CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
             echo "Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
@@ -64,11 +81,27 @@ jobs:
         uses: rust-lang/crates-io-auth-action@v1
         id: crates-auth
 
-      # Publish core first (models depends on it)
+      # Check which crates exist on crates.io (for first-time publish detection)
+      - name: Check crate existence
+        id: check-crates
+        run: |
+          check_crate() {
+            if curl -s "https://crates.io/api/v1/crates/$1" | grep -q '"crate":'; then
+              echo "exists"
+            else
+              echo "new"
+            fi
+          }
+          echo "core=$(check_crate azure_ai_foundry_core)" >> $GITHUB_OUTPUT
+          echo "models=$(check_crate azure_ai_foundry_models)" >> $GITHUB_OUTPUT
+          echo "agents=$(check_crate azure_ai_foundry_agents)" >> $GITHUB_OUTPUT
+
+      # Publish core first (models and agents depend on it)
       - name: Publish azure_ai_foundry_core
         run: cargo publish -p azure_ai_foundry_core
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
+          # Use manual token for first publish, trusted publishing for subsequent
+          CARGO_REGISTRY_TOKEN: ${{ steps.check-crates.outputs.core == 'new' && secrets.CRATES_IO_TOKEN || steps.crates-auth.outputs.token }}
 
       # Wait for crates.io to index the new crate
       - name: Wait for crates.io indexing
@@ -78,7 +111,17 @@ jobs:
       - name: Publish azure_ai_foundry_models
         run: cargo publish -p azure_ai_foundry_models
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.crates-auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.check-crates.outputs.models == 'new' && secrets.CRATES_IO_TOKEN || steps.crates-auth.outputs.token }}
+
+      # Wait for crates.io to index
+      - name: Wait for crates.io indexing
+        run: sleep 30
+
+      # Publish agents (depends on core)
+      - name: Publish azure_ai_foundry_agents
+        run: cargo publish -p azure_ai_foundry_agents
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.check-crates.outputs.agents == 'new' && secrets.CRATES_IO_TOKEN || steps.crates-auth.outputs.token }}
 
   # Create GitHub Release
   github-release:
@@ -89,11 +132,18 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Extract changelog for this version
         id: changelog
         run: |
-          VERSION="${GITHUB_REF#refs/tags/v}"
+          if [ -n "${{ inputs.tag }}" ]; then
+            VERSION="${{ inputs.tag }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          fi
           # Extract the section for this version from CHANGELOG.md
           NOTES=$(awk "/^## \[$VERSION\]/{flag=1; next} /^## \[/{flag=0} flag" CHANGELOG.md)
           echo "notes<<EOF" >> $GITHUB_OUTPUT
@@ -103,6 +153,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           body: ${{ steps.changelog.outputs.notes }}
           generate_release_notes: false
         env:
