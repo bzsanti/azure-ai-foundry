@@ -88,33 +88,43 @@ jobs:
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      # Check which crates/versions are already published
+      # Check which crates/versions are already published using HTTP status codes
       - name: Check crate versions
         id: check-crates
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          echo "Checking version: $VERSION"
 
-          check_crate_version() {
-            CRATE=$1
-            # Check if crate exists
-            RESPONSE=$(curl -s "https://crates.io/api/v1/crates/$CRATE")
-            if ! echo "$RESPONSE" | grep -q '"crate":'; then
-              echo "new"  # Crate doesn't exist at all
+          check_crate_status() {
+            local CRATE=$1
+            # Check if specific version exists (returns 200 if published)
+            local HTTP_CODE
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://crates.io/api/v1/crates/$CRATE/$VERSION")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "published"
               return
             fi
-            # Check if specific version exists
-            if echo "$RESPONSE" | grep -q "\"num\":\"$VERSION\""; then
-              echo "published"  # This version already published
+            # Check if crate exists at all
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "https://crates.io/api/v1/crates/$CRATE")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "exists"
             else
-              echo "exists"  # Crate exists but not this version
+              echo "new"
             fi
           }
 
-          echo "core=$(check_crate_version azure_ai_foundry_core)" >> $GITHUB_OUTPUT
-          echo "models=$(check_crate_version azure_ai_foundry_models)" >> $GITHUB_OUTPUT
-          echo "agents=$(check_crate_version azure_ai_foundry_agents)" >> $GITHUB_OUTPUT
+          # Check each crate and capture output
+          CORE_STATUS=$(check_crate_status azure_ai_foundry_core)
+          echo "core=$CORE_STATUS" >> $GITHUB_OUTPUT
+          echo "Core: $CORE_STATUS"
 
-          echo "Status: core=${{ steps.check-crates.outputs.core }}, models=${{ steps.check-crates.outputs.models }}, agents=${{ steps.check-crates.outputs.agents }}"
+          MODELS_STATUS=$(check_crate_status azure_ai_foundry_models)
+          echo "models=$MODELS_STATUS" >> $GITHUB_OUTPUT
+          echo "Models: $MODELS_STATUS"
+
+          AGENTS_STATUS=$(check_crate_status azure_ai_foundry_agents)
+          echo "agents=$AGENTS_STATUS" >> $GITHUB_OUTPUT
+          echo "Agents: $AGENTS_STATUS"
 
       # Publish core first (models and agents depend on it)
       - name: Publish azure_ai_foundry_core
