@@ -45,7 +45,11 @@ use tokio::sync::Mutex;
 
 /// Buffer time before token expiration to trigger proactive refresh.
 /// Tokens will be refreshed when they have less than this duration remaining.
-pub const TOKEN_EXPIRY_BUFFER: Duration = Duration::from_secs(60);
+///
+/// This is set to 120 seconds (2 minutes) to handle high-latency networks
+/// where a 60-second buffer might not be sufficient. The token could expire
+/// between validation and actual use if network round-trip is slow.
+pub const TOKEN_EXPIRY_BUFFER: Duration = Duration::from_secs(120);
 
 /// The scope required for Azure AI Foundry / Cognitive Services APIs.
 pub const COGNITIVE_SERVICES_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
@@ -73,6 +77,17 @@ pub enum FoundryCredential {
 }
 
 impl FoundryCredential {
+    /// Returns a static string describing the credential type for tracing.
+    ///
+    /// This method is used internally to populate span fields without
+    /// exposing sensitive information.
+    fn credential_type_name(&self) -> &'static str {
+        match self {
+            Self::ApiKey(_) => "api_key",
+            Self::TokenCredential { .. } => "token_credential",
+        }
+    }
+
     /// Create a credential from environment variables.
     ///
     /// Checks `AZURE_AI_FOUNDRY_API_KEY` first. If not set or empty,
@@ -173,15 +188,22 @@ impl FoundryCredential {
     /// For API keys, returns `Bearer <key>`.
     /// For token credentials, acquires a token for the Cognitive Services scope
     /// and returns `Bearer <token>`. Tokens are cached to avoid redundant requests,
-    /// and automatically refreshed before expiration (with a 60-second buffer).
+    /// and automatically refreshed before expiration (with a 120-second buffer).
     ///
     /// This method is thread-safe: concurrent calls will wait for a single token
     /// acquisition rather than making duplicate requests.
     ///
+    /// # Tracing
+    ///
+    /// This method emits a span named `foundry::auth::resolve` with the following fields:
+    /// - `credential_type`: Either "api_key" or "token_credential"
+    ///
     /// # Errors
     ///
     /// Returns an error if token acquisition fails.
+    #[tracing::instrument(name = "foundry::auth::resolve", skip(self), fields(credential_type = self.credential_type_name()))]
     pub async fn resolve(&self) -> FoundryResult<String> {
+        tracing::debug!("resolving credential");
         match self {
             Self::ApiKey(key) => Ok(format!("Bearer {}", key.expose_secret())),
             Self::TokenCredential { credential, cache } => {
@@ -219,17 +241,19 @@ impl FoundryCredential {
 
     /// Get an access token for the Cognitive Services scope.
     ///
+    /// Fetch a fresh access token, bypassing the internal cache.
+    ///
     /// This is useful when you need the raw token and expiration time,
     /// for example for caching or monitoring token lifetimes.
     ///
-    /// Note: This method bypasses the internal cache and always fetches a fresh token.
-    /// Use `resolve()` for normal authentication which benefits from caching.
+    /// **Note:** This method always fetches a fresh token from the identity provider.
+    /// Use [`resolve()`](Self::resolve) for normal authentication which benefits from caching.
     ///
     /// # Errors
     ///
     /// Returns an error if this is an API key credential (use `resolve()` instead)
     /// or if token acquisition fails.
-    pub async fn get_token(&self) -> FoundryResult<AccessToken> {
+    pub async fn fetch_fresh_token(&self) -> FoundryResult<AccessToken> {
         match self {
             Self::ApiKey(_) => Err(FoundryError::auth(
                 "Cannot get token from API key credential. Use resolve() instead.",
@@ -244,9 +268,9 @@ impl FoundryCredential {
         }
     }
 
-    /// Get an access token with custom options.
+    /// Fetch a fresh access token with custom options, bypassing the internal cache.
     ///
-    /// Note: This method bypasses the internal cache and always fetches a fresh token.
+    /// **Note:** This method always fetches a fresh token from the identity provider.
     ///
     /// # Arguments
     ///
@@ -255,7 +279,7 @@ impl FoundryCredential {
     /// # Errors
     ///
     /// Returns an error if this is an API key credential or if token acquisition fails.
-    pub async fn get_token_with_options(
+    pub async fn fetch_fresh_token_with_options(
         &self,
         options: TokenRequestOptions<'_>,
     ) -> FoundryResult<AccessToken> {
@@ -271,6 +295,21 @@ impl FoundryCredential {
                     .map_err(|e| FoundryError::auth_with_source("failed to acquire token", e))
             }
         }
+    }
+
+    /// Deprecated: use [`fetch_fresh_token()`](Self::fetch_fresh_token) instead.
+    #[deprecated(since = "0.3.0", note = "Use fetch_fresh_token() instead")]
+    pub async fn get_token(&self) -> FoundryResult<AccessToken> {
+        self.fetch_fresh_token().await
+    }
+
+    /// Deprecated: use [`fetch_fresh_token_with_options()`](Self::fetch_fresh_token_with_options) instead.
+    #[deprecated(since = "0.3.0", note = "Use fetch_fresh_token_with_options() instead")]
+    pub async fn get_token_with_options(
+        &self,
+        options: TokenRequestOptions<'_>,
+    ) -> FoundryResult<AccessToken> {
+        self.fetch_fresh_token_with_options(options).await
     }
 }
 
@@ -301,6 +340,7 @@ mod tests {
     use serial_test::serial;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::Duration;
+    use tracing_test::traced_test;
 
     // Mock TokenCredential for testing
     #[derive(Debug)]
@@ -536,9 +576,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_token_with_api_key_fails() {
+    async fn fetch_fresh_token_with_api_key_fails() {
         let cred = FoundryCredential::api_key("my-key");
-        let result = cred.get_token().await;
+        let result = cred.fetch_fresh_token().await;
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -547,34 +587,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_token_with_token_credential() {
+    async fn fetch_fresh_token_with_token_credential() {
         let mock = MockTokenCredential::new("access-token-123");
         let cred = FoundryCredential::token_credential(mock);
 
-        let token = cred.get_token().await.expect("should get token");
+        let token = cred.fetch_fresh_token().await.expect("should get token");
         assert_eq!(token.token.secret(), "access-token-123");
         // Token should expire in the future
         assert!(token.expires_on > azure_core::time::OffsetDateTime::now_utc());
     }
 
     #[tokio::test]
-    async fn get_token_with_options_api_key_fails() {
+    async fn fetch_fresh_token_with_options_api_key_fails() {
         let cred = FoundryCredential::api_key("my-key");
         let options = TokenRequestOptions::default();
-        let result = cred.get_token_with_options(options).await;
+        let result = cred.fetch_fresh_token_with_options(options).await;
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), FoundryError::Auth { .. }));
     }
 
     #[tokio::test]
-    async fn get_token_with_options_token_credential() {
+    async fn fetch_fresh_token_with_options_token_credential() {
         let mock = MockTokenCredential::new("token-with-options");
         let cred = FoundryCredential::token_credential(mock);
 
         let options = TokenRequestOptions::default();
         let token = cred
-            .get_token_with_options(options)
+            .fetch_fresh_token_with_options(options)
             .await
             .expect("should get token");
         assert_eq!(token.token.secret(), "token-with-options");
@@ -676,7 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_token_cache_refreshes_before_expiry() {
-        // Setup: Token that "expires" in 30 seconds, which is within the 60s buffer
+        // Setup: Token that "expires" in 30 seconds, which is within the 120s buffer
         // This should trigger a refresh even though the token hasn't technically expired
         let mock = CountingTokenCredential::new("almost-expired-token", 30);
         let cred = FoundryCredential::token_credential(mock.clone());
@@ -694,7 +734,7 @@ mod tests {
         assert_eq!(
             mock.call_count(),
             2,
-            "get_token should be called twice, token is within 60s expiry buffer"
+            "get_token should be called twice, token is within 120s expiry buffer"
         );
     }
 
@@ -788,5 +828,82 @@ mod tests {
         for result in results {
             assert!(result.is_ok(), "Task should not have panicked");
         }
+    }
+
+    // --- Tracing Instrumentation Tests ---
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_resolve_emits_auth_span() {
+        let cred = FoundryCredential::api_key("test-key");
+        let _ = cred.resolve().await;
+
+        // Verify span was emitted with debug event
+        assert!(logs_contain("foundry::auth::resolve"));
+        assert!(logs_contain("resolving credential"));
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_resolve_emits_credential_type_field() {
+        // Test API key credential type
+        let api_key_cred = FoundryCredential::api_key("test-key");
+        let _ = api_key_cred.resolve().await;
+        assert!(logs_contain("credential_type"));
+        assert!(logs_contain("api_key"));
+    }
+
+    // --- Token Expiry Buffer Tests (Fix 1: Prevent race condition in slow networks) ---
+
+    #[test]
+    fn test_default_token_expiry_buffer_is_120_seconds() {
+        // The buffer should be 120 seconds to handle slow networks
+        // 60 seconds was too aggressive and could cause tokens to expire
+        // before reaching the server in high-latency scenarios
+        assert_eq!(
+            TOKEN_EXPIRY_BUFFER,
+            Duration::from_secs(120),
+            "TOKEN_EXPIRY_BUFFER should be 120 seconds for slow network safety"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_token_with_90_second_expiry_refreshes_with_120_buffer() {
+        // A token expiring in 90 seconds should be refreshed because it's
+        // within the 120-second buffer window
+        let mock = CountingTokenCredential::new("short-token", 90);
+        let cred = FoundryCredential::token_credential(mock.clone());
+
+        // First call - should fetch token
+        let _ = cred.resolve().await.expect("first resolve");
+        assert_eq!(mock.call_count(), 1);
+
+        // Second call - token is within 120s buffer, should refresh
+        let _ = cred.resolve().await.expect("second resolve");
+        assert_eq!(
+            mock.call_count(),
+            2,
+            "Token with 90s expiry should be refreshed when buffer is 120s"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_token_with_180_second_expiry_uses_cache_with_120_buffer() {
+        // A token expiring in 180 seconds should NOT be refreshed
+        // because it's outside the 120-second buffer window
+        let mock = CountingTokenCredential::new("long-token", 180);
+        let cred = FoundryCredential::token_credential(mock.clone());
+
+        // First call - should fetch token
+        let _ = cred.resolve().await.expect("first resolve");
+        assert_eq!(mock.call_count(), 1);
+
+        // Second call - token is outside 120s buffer, should use cache
+        let _ = cred.resolve().await.expect("second resolve");
+        assert_eq!(
+            mock.call_count(),
+            1,
+            "Token with 180s expiry should use cache when buffer is 120s"
+        );
     }
 }

@@ -12,6 +12,7 @@ Chat completions and embeddings client for the Azure AI Foundry Rust SDK.
 - **Embeddings** — Generate vector embeddings for text
 - **Streaming** — SSE with optimized parsing and 1MB buffer protection
 - **Builder Pattern** — Type-safe request construction with parameter validation
+- **Tracing** — Full instrumentation with `tracing` spans
 
 ## Installation
 
@@ -113,6 +114,7 @@ for (i, item) in response.data.iter().enumerate() {
 ## Related Crates
 
 - [`azure_ai_foundry_core`](../azure_ai_foundry_core) — Core types, authentication, and HTTP client
+- [`azure_ai_foundry_agents`](../azure_ai_foundry_agents) — Agent Service (threads, runs)
 
 ## License
 

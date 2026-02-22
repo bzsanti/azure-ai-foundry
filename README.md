@@ -22,10 +22,10 @@ An **unofficial** Rust SDK for [Microsoft Foundry](https://azure.microsoft.com/e
 
 | Crate | Description | Status |
 |-------|-------------|--------|
-| [`azure_ai_foundry_core`](./sdk/azure_ai_foundry_core) | Auth, HTTP client, shared types | 🟡 In development |
-| [`azure_ai_foundry_models`](./sdk/azure_ai_foundry_models) | Chat completions, embeddings | 🟡 In development |
-| `azure_ai_foundry_agents` | Agent Service (threads, tool calling) | 📋 Planned (v0.2.0) |
-| `azure_ai_foundry_tools` | Vision, Document Intelligence, Translation | 📋 Planned (v0.3.0) |
+| [`azure_ai_foundry_core`](./sdk/azure_ai_foundry_core) | Auth, HTTP client, shared types | ✅ Released |
+| [`azure_ai_foundry_models`](./sdk/azure_ai_foundry_models) | Chat completions, embeddings | ✅ Released |
+| [`azure_ai_foundry_agents`](./sdk/azure_ai_foundry_agents) | Agent Service (threads, runs) | ✅ Released |
+| `azure_ai_foundry_tools` | Vision, Document Intelligence | 📋 Planned (v0.4.0) |
 
 ## Quick Start
 
@@ -33,8 +33,8 @@ Add the dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.1"
-azure_ai_foundry_models = "0.1"
+azure_ai_foundry_core = "0.2"
+azure_ai_foundry_models = "0.2"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -85,18 +85,29 @@ export AZURE_AI_FOUNDRY_API_KEY="your-key"  # Falls back to Entra ID if not set
 
 ## Roadmap
 
-### v0.1.0 (Current) - Ready for Release
+### v0.1.0 ✅
 - [x] Project structure and CI
 - [x] Chat completions (sync)
 - [x] Chat completions (streaming)
 - [x] Entra ID token acquisition via `azure_identity`
 - [x] Embeddings
 
-### v0.2.0
-- [ ] Agent Service (threads, tool calling)
+### v0.2.0 ✅
+- [x] Real authentication with `azure_identity` (`Arc<dyn TokenCredential>`)
+- [x] SSE parsing optimized with `memchr`
+- [x] Quality improvements (buffer limits, error sanitization, streaming timeouts, retry logic)
+- [x] Builder validations
+- [x] High concurrency tests
+- [x] Trusted Publishing to crates.io
 
-### v0.3.0
-- [ ] Foundry Tools (Vision, Document Intelligence, Translation)
+### v0.3.0 ✅
+- [x] Tracing instrumentation across all API calls
+- [x] Agent Service crate (agents, threads, messages, runs)
+- [x] Security: HTTPS validation, token refresh hardening
+- [x] 270 tests passing
+
+### v0.4.0 (Planned)
+- [ ] Foundry Tools (Vision, Document Intelligence)
 
 ## Contributing
 

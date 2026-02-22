@@ -49,9 +49,16 @@ sdk/
 │   ├── error.rs              # FoundryError (thiserror)
 │   └── models.rs             # Common types
 │
-└── azure_ai_foundry_models   # Model inference APIs (depends on core)
-    ├── chat.rs               # Chat completions + streaming
-    └── embeddings.rs         # Vector embeddings
+├── azure_ai_foundry_models   # Model inference APIs (depends on core)
+│   ├── chat.rs               # Chat completions + streaming
+│   └── embeddings.rs         # Vector embeddings
+│
+└── azure_ai_foundry_agents   # Agent Service APIs (depends on core)
+    ├── agent.rs              # Create, get, list, delete agents
+    ├── thread.rs             # Thread management
+    ├── message.rs            # Message management
+    ├── run.rs                # Run execution and polling
+    └── models.rs             # Shared types
 ```
 
 ### Key Patterns
@@ -64,8 +71,7 @@ sdk/
 
 ### Planned Crates (not yet implemented)
 
-- `azure_ai_foundry_agents` - Agent Service (v0.2.0)
-- `azure_ai_foundry_tools` - Vision, Document Intelligence (v0.3.0)
+- `azure_ai_foundry_tools` - Vision, Document Intelligence (v0.4.0)
 
 ## Code Style
 
@@ -129,42 +135,70 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-02-16)
+## Session Status (2026-02-21)
 
-**Branch:** `main`
+**Branch:** `develop/v0.3.0`
 
 **v0.1.0 Status:** RELEASED
+**v0.2.0 Status:** RELEASED ✅
 
-**v0.2.0 Status:** Code complete, release workflow pending
+Published to crates.io:
+- https://crates.io/crates/azure_ai_foundry_core/0.2.0
+- https://crates.io/crates/azure_ai_foundry_models/0.2.0
 
-All v0.2.0 quality improvements are merged to main. The crates.io Trusted Publishing workflow needs debugging (PRs #6, #7, #8 attempted fixes for OIDC token exchange).
+**v0.3.0 Status:** IN PROGRESS (Agents Crate + Security Fixes)
 
-**Completed Features:**
-- Real authentication with `azure_identity` (`Arc<dyn TokenCredential>`)
-- API key and Entra ID authentication
-- Chat completions (sync + streaming)
-- SSE parsing optimized with `memchr`
-- Embeddings API (`embed()` function with builder pattern)
+**Completed Features v0.3.0:**
+- ✅ Tracing instrumentation
+- ✅ README updated for v0.2.0 release
+- ✅ FoundryClient fields made private (encapsulation)
+- ✅ Comprehensive quality fixes (13/13)
+- ✅ `azure_ai_foundry_agents` crate implemented
+- ✅ Security: Token refresh buffer increased to 120s (prevents race condition in slow networks)
+- ✅ Security: HTTPS validation in endpoint builder (HTTP only allowed for localhost)
+- ✅ Robustness: SSE parsing defensive check for empty lines
 
-**Quality Improvements v0.2.0 (8 of 10 implemented):**
+**New: `azure_ai_foundry_agents` Crate:**
 
-| # | Improvement | Status |
-|---|-------------|--------|
-| 1 | SSE Buffer Limit (1MB) | ✅ Complete |
-| 2 | Error Sanitization | ✅ Complete |
-| 3 | Streaming Timeouts (5 min) | ✅ Complete |
-| 4 | Token Race Condition | ✅ Already in v0.1.0 |
-| 5 | Builder Validations | ✅ Complete |
-| 6 | Streaming Retry Logic | ✅ Complete |
-| 7 | Clone Optimization | ❌ Discarded |
-| 8 | Doc Examples | ✅ Complete |
-| 9 | Tracing Instrumentation | ⏳ Deferred to v0.3.0 |
-| 10 | High Concurrency Tests | ✅ Complete |
+| Module | Functions | Status |
+|--------|-----------|--------|
+| `agent` | create, get, list, delete | ✅ Complete |
+| `thread` | create, get, delete | ✅ Complete |
+| `message` | create, list, get | ✅ Complete |
+| `run` | create, get, create_thread_and_run, poll_until_complete | ✅ Complete |
 
-**Pending:**
-- Fix Trusted Publishing workflow for crates.io (OIDC token exchange)
-- Publish v0.2.0 to crates.io
+**Tracing Spans (agents crate):**
+
+| Span | Fields |
+|------|--------|
+| `foundry::agents::create` | model |
+| `foundry::agents::get` | agent_id |
+| `foundry::agents::list` | - |
+| `foundry::agents::delete` | agent_id |
+| `foundry::threads::create` | - |
+| `foundry::threads::get` | thread_id |
+| `foundry::threads::delete` | thread_id |
+| `foundry::messages::create` | thread_id |
+| `foundry::messages::list` | thread_id |
+| `foundry::messages::get` | thread_id, message_id |
+| `foundry::runs::create` | thread_id, assistant_id |
+| `foundry::runs::get` | thread_id, run_id |
+| `foundry::runs::create_thread_and_run` | assistant_id |
+| `foundry::runs::poll_until_complete` | thread_id, run_id |
+
+**Core Changes v0.3.0:**
+- Added `FoundryClient::delete()` method for DELETE requests
+- `get_token()` deprecated → use `fetch_fresh_token()`
+- `EmbeddingUsage` removed → use `Usage` from core
+- `AzureSdk` variant changed from `(String)` to `{ message, source }`
+- `TOKEN_EXPIRY_BUFFER` increased from 60s to 120s for slow network safety
+- HTTPS required for endpoints (except localhost for development)
+- SSE parsing defensive check for empty/short lines
+
+**Next Steps (v0.3.0):**
+- Integration tests for agents crate (OPTIONAL - ready for release)
+- `azure_ai_foundry_tools` crate (Vision, Document Intelligence) - moved to v0.4.0
 
 **Test Summary:**
-- 160 tests passing (79 core + 65 models + 16 doc-tests)
+- 270 tests passing (113 core + 77 models + 42 agents + 38 doc-tests)
 - All clippy checks passing (0 warnings)

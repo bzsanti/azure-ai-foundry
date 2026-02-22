@@ -3,8 +3,8 @@ resolver = "2"
 members = [
     "sdk/azure_ai_foundry_core",
     "sdk/azure_ai_foundry_models",
-    # "sdk/azure_ai_foundry_agents",  # Coming in v0.2.0
-    # "sdk/azure_ai_foundry_tools",   # Coming in v0.3.0
+    "sdk/azure_ai_foundry_agents",
+    # "sdk/azure_ai_foundry_tools",   # Coming in v0.4.0
 ]
 
 [workspace.package]

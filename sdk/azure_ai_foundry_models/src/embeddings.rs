@@ -44,6 +44,7 @@
 
 use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
+use azure_ai_foundry_core::models::Usage;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -105,7 +106,11 @@ pub struct EmbeddingResponse {
     pub object: String,
     pub model: String,
     pub data: Vec<EmbeddingData>,
-    pub usage: EmbeddingUsage,
+    /// Usage statistics for the request.
+    ///
+    /// Note: `completion_tokens` will be `None` for embedding requests
+    /// since embeddings do not generate completion tokens.
+    pub usage: Usage,
 }
 
 /// A single embedding in the response.
@@ -113,13 +118,6 @@ pub struct EmbeddingResponse {
 pub struct EmbeddingData {
     pub index: u32,
     pub embedding: Vec<f32>,
-}
-
-/// Usage statistics for an embedding request.
-#[derive(Debug, Clone, Deserialize)]
-pub struct EmbeddingUsage {
-    pub prompt_tokens: u32,
-    pub total_tokens: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -145,12 +143,31 @@ pub struct EmbeddingUsage {
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Tracing
+///
+/// This function emits a span named `foundry::embeddings::embed` with the following fields:
+/// - `model`: The model being used for embedding generation
+/// - `input_count`: Number of inputs being embedded
+/// - `prompt_tokens`: Number of tokens in the input (recorded after response)
+#[tracing::instrument(
+    name = "foundry::embeddings::embed",
+    skip(client, request),
+    fields(model = %request.model, input_count = request.input_count(), prompt_tokens)
+)]
 pub async fn embed(
     client: &FoundryClient,
     request: &EmbeddingRequest,
 ) -> FoundryResult<EmbeddingResponse> {
+    tracing::debug!("sending embedding request");
+
     let response = client.post("/openai/v1/embeddings", request).await?;
     let body = response.json::<EmbeddingResponse>().await?;
+
+    // Record token usage in the span
+    let span = tracing::Span::current();
+    span.record("prompt_tokens", body.usage.prompt_tokens);
+
     Ok(body)
 }
 
@@ -164,6 +181,16 @@ pub struct EmbeddingRequestBuilder {
 }
 
 impl EmbeddingRequest {
+    /// Returns the number of inputs in this request.
+    ///
+    /// Used for tracing instrumentation.
+    fn input_count(&self) -> usize {
+        match &self.input {
+            EmbeddingInput::Single(_) => 1,
+            EmbeddingInput::Multiple(v) => v.len(),
+        }
+    }
+
     /// Create a new builder.
     pub fn builder() -> EmbeddingRequestBuilder {
         EmbeddingRequestBuilder {
@@ -235,6 +262,22 @@ impl EmbeddingRequestBuilder {
             .input
             .ok_or_else(|| FoundryError::Builder("input is required".into()))?;
 
+        // Validate input is not empty
+        match &input {
+            EmbeddingInput::Single(s) if s.is_empty() => {
+                return Err(FoundryError::Builder("input cannot be empty".into()));
+            }
+            EmbeddingInput::Multiple(v) if v.is_empty() => {
+                return Err(FoundryError::Builder("inputs cannot be empty".into()));
+            }
+            EmbeddingInput::Multiple(v) if v.iter().any(|s| s.is_empty()) => {
+                return Err(FoundryError::Builder(
+                    "inputs cannot contain empty strings".into(),
+                ));
+            }
+            _ => {}
+        }
+
         // Validate dimensions (must be > 0)
         if let Some(dims) = self.dimensions {
             if dims == 0 {
@@ -264,6 +307,7 @@ impl EmbeddingRequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
 
     // --- Ciclo 1: Builder with required fields only ---
 
@@ -697,6 +741,48 @@ mod tests {
     }
 
     #[test]
+    fn test_embedding_builder_rejects_empty_input() {
+        let result = EmbeddingRequest::builder()
+            .model("text-embedding-ada-002")
+            .input("")
+            .try_build();
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("input cannot be empty"));
+    }
+
+    #[test]
+    fn test_embedding_builder_rejects_empty_inputs_vec() {
+        let result = EmbeddingRequest::builder()
+            .model("text-embedding-ada-002")
+            .inputs(Vec::<String>::new())
+            .try_build();
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("inputs cannot be empty"));
+    }
+
+    #[test]
+    fn test_embedding_builder_rejects_inputs_with_empty_string() {
+        let result = EmbeddingRequest::builder()
+            .model("text-embedding-ada-002")
+            .inputs(vec!["hello", ""])
+            .try_build();
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("inputs cannot contain empty strings"));
+    }
+
+    #[test]
     fn test_try_build_success() {
         let result = EmbeddingRequest::builder()
             .model("text-embedding-ada-002")
@@ -737,5 +823,47 @@ mod tests {
             EmbeddingInput::Multiple(v) => assert_eq!(v.len(), 3),
             _ => panic!("Expected Multiple"),
         }
+    }
+
+    // --- Tracing Instrumentation Tests ---
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_embed_emits_embeddings_span() {
+        use crate::test_utils::setup_mock_client;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+
+        let response_body = serde_json::json!({
+            "object": "list",
+            "model": "text-embedding-ada-002",
+            "data": [{
+                "index": 0,
+                "embedding": [0.1, 0.2, 0.3]
+            }],
+            "usage": {
+                "prompt_tokens": 5,
+                "total_tokens": 5
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/embeddings"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = EmbeddingRequest::builder()
+            .model("text-embedding-ada-002")
+            .input("Hello")
+            .build();
+
+        let _ = embed(&client, &request).await;
+
+        assert!(logs_contain("foundry::embeddings::embed"));
     }
 }

@@ -105,46 +105,75 @@ impl ChatCompletionRequest {
 }
 
 impl ChatCompletionRequestBuilder {
+    /// Set the model ID to use for the completion.
+    ///
+    /// **Required.** Example values: `"gpt-4o"`, `"gpt-4o-mini"`.
     pub fn model(mut self, model: impl Into<String>) -> Self {
         self.model = Some(model.into());
         self
     }
 
+    /// Add a single message to the conversation.
+    ///
+    /// Messages are appended in order. Use [`messages`](Self::messages) to add multiple at once.
     pub fn message(mut self, message: Message) -> Self {
         self.messages.push(message);
         self
     }
 
+    /// Add multiple messages to the conversation.
+    ///
+    /// Accepts any type implementing `IntoIterator<Item = Message>`.
     pub fn messages(mut self, messages: impl IntoIterator<Item = Message>) -> Self {
         self.messages.extend(messages);
         self
     }
 
+    /// Set the sampling temperature (0.0 to 2.0).
+    ///
+    /// Higher values make output more random, lower values more deterministic.
+    /// Defaults to the model's default if not set.
     pub fn temperature(mut self, temp: f32) -> Self {
         self.temperature = Some(temp);
         self
     }
 
+    /// Set the nucleus sampling parameter (0.0 to 1.0).
+    ///
+    /// Controls diversity via nucleus sampling: 0.1 means only tokens comprising
+    /// the top 10% probability mass are considered.
     pub fn top_p(mut self, top_p: f32) -> Self {
         self.top_p = Some(top_p);
         self
     }
 
+    /// Set the maximum number of tokens to generate.
     pub fn max_tokens(mut self, max: u32) -> Self {
         self.max_tokens = Some(max);
         self
     }
 
+    /// Set stop sequences.
+    ///
+    /// The model will stop generating when it encounters any of these sequences.
     pub fn stop(mut self, stop: Vec<String>) -> Self {
         self.stop = Some(stop);
         self
     }
 
+    /// Set the presence penalty (-2.0 to 2.0).
+    ///
+    /// Positive values penalize new tokens based on whether they appear in the text so far,
+    /// increasing the model's likelihood to talk about new topics.
     pub fn presence_penalty(mut self, penalty: f32) -> Self {
         self.presence_penalty = Some(penalty);
         self
     }
 
+    /// Set the frequency penalty (-2.0 to 2.0).
+    ///
+    /// Positive values penalize new tokens based on their existing frequency in the text,
+    /// decreasing the model's likelihood to repeat the same line verbatim.
     pub fn frequency_penalty(mut self, penalty: f32) -> Self {
         self.frequency_penalty = Some(penalty);
         self
@@ -156,6 +185,13 @@ impl ChatCompletionRequestBuilder {
         let model = self
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
+
+        // Validate at least one message is present
+        if self.messages.is_empty() {
+            return Err(FoundryError::Builder(
+                "at least one message is required".into(),
+            ));
+        }
 
         // Validate temperature (0.0 - 2.0)
         if let Some(temp) = self.temperature {
@@ -389,13 +425,35 @@ pub struct Delta {
 /// }
 /// # }
 /// ```
+///
+/// # Tracing
+///
+/// This function emits a span named `foundry::chat::complete` with the following fields:
+/// - `model`: The model being used for completion
+/// - `prompt_tokens`: Number of tokens in the prompt (recorded after response)
+/// - `completion_tokens`: Number of tokens in the completion (recorded after response)
+#[tracing::instrument(
+    name = "foundry::chat::complete",
+    skip(client, request),
+    fields(model = %request.model, prompt_tokens, completion_tokens)
+)]
 pub async fn complete(
     client: &FoundryClient,
     request: &ChatCompletionRequest,
 ) -> FoundryResult<ChatCompletionResponse> {
+    tracing::debug!("sending chat completion request");
+
     let response = client.post("/openai/v1/chat/completions", request).await?;
 
     let body = response.json::<ChatCompletionResponse>().await?;
+
+    // Record token usage in the span
+    if let Some(ref usage) = body.usage {
+        let span = tracing::Span::current();
+        span.record("prompt_tokens", usage.prompt_tokens);
+        span.record("completion_tokens", usage.completion_tokens);
+    }
+
     Ok(body)
 }
 
@@ -466,10 +524,22 @@ pub async fn complete(
 /// }
 /// # }
 /// ```
+///
+/// # Tracing
+///
+/// This function emits a span named `foundry::chat::complete_stream` with the following fields:
+/// - `model`: The model being used for completion
+#[tracing::instrument(
+    name = "foundry::chat::complete_stream",
+    skip(client, request),
+    fields(model = %request.model)
+)]
 pub async fn complete_stream(
     client: &FoundryClient,
     request: &ChatCompletionRequest,
 ) -> FoundryResult<impl Stream<Item = FoundryResult<ChatCompletionChunk>>> {
+    tracing::debug!("initiating streaming chat completion");
+
     // Create a modified request with stream: true
     let stream_request = StreamingRequest {
         model: &request.model,
@@ -486,6 +556,8 @@ pub async fn complete_stream(
     let response = client
         .post_stream("/openai/v1/chat/completions", &stream_request)
         .await?;
+
+    tracing::debug!("stream initiated");
 
     Ok(parse_sse_stream(response))
 }
@@ -563,6 +635,12 @@ fn parse_sse_stream(
                 if let Some(newline_pos) = memchr::memchr(b'\n', &buffer) {
                     // Extract line bytes and drain from buffer
                     let line_bytes: Vec<u8> = buffer.drain(..=newline_pos).collect();
+
+                    // Skip empty lines (just newline) to prevent underflow
+                    // This is defensive: memchr guarantees at least 1 byte, but we check anyway
+                    if line_bytes.len() <= 1 {
+                        continue;
+                    }
 
                     // Convert to string only when needed (skip trailing newline)
                     let line = match std::str::from_utf8(&line_bytes[..line_bytes.len() - 1]) {
@@ -643,6 +721,7 @@ fn parse_sse_line(line: &str) -> Option<FoundryResult<ChatCompletionChunk>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_test::traced_test;
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -718,6 +797,20 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "at least one message is required")]
+    fn builder_without_messages_panics() {
+        ChatCompletionRequest::builder().model("gpt-4o").build();
+    }
+
+    #[test]
+    fn try_build_returns_error_when_messages_empty() {
+        let result = ChatCompletionRequest::builder().model("gpt-4o").try_build();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("at least one message is required"));
+    }
+
+    #[test]
     fn try_build_returns_error_when_model_missing() {
         let result = ChatCompletionRequest::builder()
             .message(Message::user("Hello"))
@@ -751,6 +844,7 @@ mod tests {
         // Temperature must be between 0.0 and 2.0
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .temperature(3.0) // Invalid: > 2.0
             .try_build();
 
@@ -772,6 +866,7 @@ mod tests {
         // Temperature must be between 0.0 and 2.0
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .temperature(-0.5) // Invalid: < 0.0
             .try_build();
 
@@ -788,6 +883,7 @@ mod tests {
         // top_p must be between 0.0 and 1.0
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .top_p(1.5) // Invalid: > 1.0
             .try_build();
 
@@ -808,6 +904,7 @@ mod tests {
     fn test_builder_rejects_negative_top_p() {
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .top_p(-0.1) // Invalid: < 0.0
             .try_build();
 
@@ -819,6 +916,7 @@ mod tests {
         // presence_penalty must be between -2.0 and 2.0
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .presence_penalty(-3.0) // Invalid: < -2.0
             .try_build();
 
@@ -840,6 +938,7 @@ mod tests {
         // frequency_penalty must be between -2.0 and 2.0
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .frequency_penalty(5.0) // Invalid: > 2.0
             .try_build();
 
@@ -881,6 +980,7 @@ mod tests {
         // Edge cases: exact boundary values
         let result = ChatCompletionRequest::builder()
             .model("gpt-4o")
+            .message(Message::user("test"))
             .temperature(0.0)
             .top_p(1.0)
             .presence_penalty(-2.0)
@@ -1660,5 +1760,153 @@ mod tests {
 
         // We should have 1000 chunks
         assert_eq!(chunks.len(), 1000);
+    }
+
+    // --- Tracing Instrumentation Tests ---
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_complete_emits_chat_span() {
+        let server = MockServer::start().await;
+
+        let response_body = serde_json::json!({
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1677652288,
+            "model": "gpt-4o",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&response_body))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let _ = complete(&client, &request).await;
+
+        assert!(logs_contain("foundry::chat::complete"));
+    }
+
+    // --- SSE Parsing Edge Case Tests (Fix 3: Prevent panic on empty/short lines) ---
+
+    #[test]
+    fn test_sse_line_single_byte_no_panic() {
+        // A line with only a newline character should not panic
+        // After stripping the newline, we get an empty string
+        let result = super::parse_sse_line("");
+        assert!(result.is_none(), "Empty line should return None");
+    }
+
+    #[test]
+    fn test_sse_line_whitespace_only_no_panic() {
+        // Line with only whitespace should not panic
+        let result = super::parse_sse_line("   ");
+        assert!(result.is_none(), "Whitespace-only line should return None");
+    }
+
+    #[test]
+    fn test_sse_line_single_char_no_panic() {
+        // Single character line should not panic
+        let result = super::parse_sse_line("x");
+        assert!(result.is_none(), "Single char line should return None");
+    }
+
+    #[tokio::test]
+    async fn test_sse_stream_empty_lines_between_data() {
+        use futures::StreamExt;
+
+        let server = MockServer::start().await;
+
+        // SSE with many empty lines between data events (common in real streams)
+        let sse_body = concat!(
+            "\n",
+            "\n",
+            "\n",
+            "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n",
+            "\n",
+            "\n",
+            "data: [DONE]\n",
+            "\n"
+        );
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(sse_body)
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let stream = complete_stream(&client, &request)
+            .await
+            .expect("should start stream");
+
+        let chunks: Vec<_> = stream.collect().await;
+
+        // Should have exactly 1 chunk (the data event), empty lines are skipped
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].is_ok());
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn test_complete_stream_emits_chat_stream_span() {
+        let server = MockServer::start().await;
+
+        let sse_body = r#"data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}
+
+data: [DONE]
+
+"#;
+
+        Mock::given(method("POST"))
+            .and(path("/openai/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(sse_body)
+                    .insert_header("content-type", "text/event-stream"),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hello"))
+            .build();
+
+        let _ = complete_stream(&client, &request).await;
+
+        assert!(logs_contain("foundry::chat::complete_stream"));
     }
 }
