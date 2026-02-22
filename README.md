@@ -22,10 +22,10 @@ An **unofficial** Rust SDK for [Microsoft Foundry](https://azure.microsoft.com/e
 
 | Crate | Description | Status |
 |-------|-------------|--------|
-| [`azure_ai_foundry_core`](./sdk/azure_ai_foundry_core) | Auth, HTTP client, shared types | ✅ Released (v0.2.0) |
-| [`azure_ai_foundry_models`](./sdk/azure_ai_foundry_models) | Chat completions, embeddings | ✅ Released (v0.2.0) |
-| `azure_ai_foundry_agents` | Agent Service (threads, tool calling) | 📋 Planned (v0.3.0) |
-| `azure_ai_foundry_tools` | Vision, Document Intelligence, Translation | 📋 Planned (v0.3.0) |
+| [`azure_ai_foundry_core`](./sdk/azure_ai_foundry_core) | Auth, HTTP client, shared types | ✅ Released |
+| [`azure_ai_foundry_models`](./sdk/azure_ai_foundry_models) | Chat completions, embeddings | ✅ Released |
+| [`azure_ai_foundry_agents`](./sdk/azure_ai_foundry_agents) | Agent Service (threads, runs) | ✅ Released |
+| `azure_ai_foundry_tools` | Vision, Document Intelligence | 📋 Planned (v0.4.0) |
 
 ## Quick Start
 
@@ -100,10 +100,14 @@ export AZURE_AI_FOUNDRY_API_KEY="your-key"  # Falls back to Entra ID if not set
 - [x] High concurrency tests
 - [x] Trusted Publishing to crates.io
 
-### v0.3.0 (Current)
-- [ ] Tracing instrumentation
-- [ ] Agent Service (threads, tool calling)
-- [ ] Foundry Tools (Vision, Document Intelligence, Translation)
+### v0.3.0 ✅
+- [x] Tracing instrumentation across all API calls
+- [x] Agent Service crate (agents, threads, messages, runs)
+- [x] Security: HTTPS validation, token refresh hardening
+- [x] 270 tests passing
+
+### v0.4.0 (Planned)
+- [ ] Foundry Tools (Vision, Document Intelligence)
 
 ## Contributing
 

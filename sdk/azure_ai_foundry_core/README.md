@@ -14,7 +14,8 @@ This crate provides the foundational building blocks used by all other `azure_ai
 - **FoundryCredential** — Authentication via API key or Microsoft Entra ID
 - **FoundryError** — Typed error handling with `thiserror`
 - **Retry logic** — Automatic retries with exponential backoff for transient errors
-- **Security** — Error sanitization to prevent credential leaks in logs
+- **Tracing** — Full instrumentation with `tracing` spans
+- **Security** — HTTPS validation, error sanitization, token refresh hardening
 
 ## Installation
 
@@ -89,6 +90,7 @@ let client = FoundryClient::builder()
 ## Related Crates
 
 - [`azure_ai_foundry_models`](../azure_ai_foundry_models) — Chat completions and embeddings
+- [`azure_ai_foundry_agents`](../azure_ai_foundry_agents) — Agent Service (threads, runs)
 
 ## License
 
