@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2025-02-21
+
+### Added
+
+#### New Crate: `azure_ai_foundry_agents`
+- `agent` module: create, get, list, delete agents
+- `thread` module: create, get, delete conversation threads
+- `message` module: create, list, get messages in threads
+- `run` module: create, get, create_thread_and_run, poll_until_complete
+
+#### Tracing Instrumentation
+- Full `tracing` spans across all API calls (chat, embeddings, agents)
+- Span fields for model, token usage, agent_id, thread_id, run_id, etc.
+
+#### Core Improvements
+- `FoundryClient::delete()` method for DELETE requests
+- `FoundryClient` fields made private (encapsulation)
+- Input validation in builders (empty strings, parameter ranges)
+
+### Security
+- **HTTPS Required**: Endpoint URLs must use HTTPS (except localhost for development)
+- **Token Refresh Buffer**: Increased from 60s to 120s to prevent race conditions in slow networks
+- **SSE Parsing**: Defensive checks for empty/malformed lines
+
+### Changed
+- `get_token()` deprecated → use `fetch_fresh_token()`
+- `EmbeddingUsage` removed → use `Usage` from core
+- `AzureSdk` error variant changed from `(String)` to `{ message, source }`
+
+### Breaking Changes
+- `FoundryClient::builder().endpoint("http://...")` now fails with `InvalidEndpoint` error
+- HTTP is only allowed for localhost/127.0.0.1 for local development
+
 ## [0.2.0] - 2025-02-15
 
 ### Added
@@ -70,6 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API keys wrapped with `secrecy` crate to prevent accidental logging
 - Error message truncation to prevent sensitive data leakage
 
-[Unreleased]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bzsanti/azure-ai-foundry/releases/tag/v0.1.0
