@@ -1,0 +1,27 @@
+[package]
+name = "azure_ai_foundry_tools"
+description = "Vision and Document Intelligence clients for Azure AI Foundry - Rust SDK"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.3.0" }
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+wiremock.workspace = true
+tracing-test = "0.2"
+
+[features]
+integration-tests = []

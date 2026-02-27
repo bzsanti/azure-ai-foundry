@@ -4,7 +4,7 @@ members = [
     "sdk/azure_ai_foundry_core",
     "sdk/azure_ai_foundry_models",
     "sdk/azure_ai_foundry_agents",
-    # "sdk/azure_ai_foundry_tools",   # Coming in v0.4.0
+    "sdk/azure_ai_foundry_tools",
 ]
 
 [workspace.package]
