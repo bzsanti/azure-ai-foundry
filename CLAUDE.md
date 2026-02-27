@@ -135,70 +135,70 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-02-21)
+## Session Status (2026-02-28)
 
-**Branch:** `develop/v0.3.0`
+**Branch:** `develop_santi`
 
 **v0.1.0 Status:** RELEASED
-**v0.2.0 Status:** RELEASED ✅
+**v0.2.0 Status:** RELEASED
+**v0.3.0 Status:** RELEASED
 
 Published to crates.io:
-- https://crates.io/crates/azure_ai_foundry_core/0.2.0
-- https://crates.io/crates/azure_ai_foundry_models/0.2.0
+- https://crates.io/crates/azure_ai_foundry_core/0.3.0
+- https://crates.io/crates/azure_ai_foundry_models/0.3.0
+- https://crates.io/crates/azure_ai_foundry_agents/0.3.0
 
-**v0.3.0 Status:** IN PROGRESS (Agents Crate + Security Fixes)
+**v0.4.0 Status:** IN PROGRESS (Tools Crate - Vision + Document Intelligence)
 
-**Completed Features v0.3.0:**
-- ✅ Tracing instrumentation
-- ✅ README updated for v0.2.0 release
-- ✅ FoundryClient fields made private (encapsulation)
-- ✅ Comprehensive quality fixes (13/13)
-- ✅ `azure_ai_foundry_agents` crate implemented
-- ✅ Security: Token refresh buffer increased to 120s (prevents race condition in slow networks)
-- ✅ Security: HTTPS validation in endpoint builder (HTTP only allowed for localhost)
-- ✅ Robustness: SSE parsing defensive check for empty lines
+**Completed Features v0.4.0:**
+- ✅ `azure_ai_foundry_tools` crate implemented (Vision + Document Intelligence)
+- ✅ Vision API: Image Analysis 4.0 (tags, caption, denseCaptions, objects, read, smartCrops, people)
+- ✅ Document Intelligence API: v4.0 with async polling pattern (prebuilt-read, prebuilt-layout, prebuilt-invoice, prebuilt-receipt, prebuilt-idDocument, prebuilt-businessCard)
+- ✅ Builder pattern for all request types with validation
+- ✅ Tracing instrumentation on all public async functions
+- ✅ Quality review completed (14 findings identified)
+- ✅ TDD quality fixes plan created
 
-**New: `azure_ai_foundry_agents` Crate:**
+**New: `azure_ai_foundry_tools` Crate:**
 
 | Module | Functions | Status |
 |--------|-----------|--------|
-| `agent` | create, get, list, delete | ✅ Complete |
-| `thread` | create, get, delete | ✅ Complete |
-| `message` | create, list, get | ✅ Complete |
-| `run` | create, get, create_thread_and_run, poll_until_complete | ✅ Complete |
+| `vision` | analyze | ✅ Complete |
+| `document_intelligence` | analyze, get_result, poll_until_complete | ✅ Complete |
+| `models` | BoundingBox, ImageMetadata, ImagePoint, API versions | ✅ Complete |
 
-**Tracing Spans (agents crate):**
+**Tracing Spans (tools crate):**
 
 | Span | Fields |
 |------|--------|
-| `foundry::agents::create` | model |
-| `foundry::agents::get` | agent_id |
-| `foundry::agents::list` | - |
-| `foundry::agents::delete` | agent_id |
-| `foundry::threads::create` | - |
-| `foundry::threads::get` | thread_id |
-| `foundry::threads::delete` | thread_id |
-| `foundry::messages::create` | thread_id |
-| `foundry::messages::list` | thread_id |
-| `foundry::messages::get` | thread_id, message_id |
-| `foundry::runs::create` | thread_id, assistant_id |
-| `foundry::runs::get` | thread_id, run_id |
-| `foundry::runs::create_thread_and_run` | assistant_id |
-| `foundry::runs::poll_until_complete` | thread_id, run_id |
+| `foundry::vision::analyze` | features |
+| `foundry::document_intelligence::analyze` | model_id |
+| `foundry::document_intelligence::get_result` | operation_location |
+| `foundry::document_intelligence::poll_until_complete` | operation_location |
 
-**Core Changes v0.3.0:**
-- Added `FoundryClient::delete()` method for DELETE requests
-- `get_token()` deprecated → use `fetch_fresh_token()`
-- `EmbeddingUsage` removed → use `Usage` from core
-- `AzureSdk` variant changed from `(String)` to `{ message, source }`
-- `TOKEN_EXPIRY_BUFFER` increased from 60s to 120s for slow network safety
-- HTTPS required for endpoints (except localhost for development)
-- SSE parsing defensive check for empty/short lines
+**Pending Quality Fixes (14 findings from code review):**
 
-**Next Steps (v0.3.0):**
-- Integration tests for agents crate (OPTIONAL - ready for release)
-- `azure_ai_foundry_tools` crate (Vision, Document Intelligence) - moved to v0.4.0
+Critical (must fix):
+1. `poll_until_complete` infinite loop — add `max_attempts` parameter
+2. NaN/Infinity validation in `smartcrops_aspect_ratios`
+3. Empty string validation for `url_source`/`base64_source`
+4. `url` field getter method (fragile private field access)
+
+Recommended (should fix):
+5. Missing README.md for crate
+6. Missing test for malformed Operation-Location URL
+7. `as_str()` / serde rename synchronization tests
+8. Wrong error variant for missing Operation-Location header
+9. `DocumentAnalysisBody` visibility reduction
+10. Missing `error` field in `AnalyzeOperationResult`
+
+Optional (nice to have):
+11. Tracing field content verification in tests
+12. `features_query_param()` visibility reduction
+13. `AnalyzeResultStatus` Display implementation
+14. Test cycle numbering gap
 
 **Test Summary:**
-- 270 tests passing (113 core + 77 models + 42 agents + 38 doc-tests)
+- 325 tests passing (113 core + 77 models + 42 agents + 46 tools + 47 doc-tests)
 - All clippy checks passing (0 warnings)
+- All formatting checks passing
