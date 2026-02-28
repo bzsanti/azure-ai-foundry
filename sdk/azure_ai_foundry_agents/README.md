@@ -18,8 +18,8 @@ Agent Service client for the Azure AI Foundry Rust SDK.
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.3"
-azure_ai_foundry_agents = "0.3"
+azure_ai_foundry_core = "0.4"
+azure_ai_foundry_agents = "0.4"
 tokio = { version = "1", features = ["full"] }
 ```
 

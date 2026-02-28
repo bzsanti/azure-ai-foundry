@@ -12,7 +12,7 @@ readme = "README.md"
 documentation = "https://docs.rs/azure_ai_foundry_agents"
 
 [dependencies]
-azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.3.0" }
+azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.4.0" }
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true

@@ -21,7 +21,7 @@ This crate provides the foundational building blocks used by all other `azure_ai
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.2"
+azure_ai_foundry_core = "0.4"
 tokio = { version = "1", features = ["full"] }
 ```
 
