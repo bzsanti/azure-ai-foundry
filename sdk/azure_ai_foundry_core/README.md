@@ -29,7 +29,7 @@ tokio = { version = "1", features = ["full"] }
 
 ### API Key Authentication
 
-```rust
+```rust,no_run
 use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::auth::FoundryCredential;
 
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Microsoft Entra ID Authentication
 
-```rust
+```rust,no_run
 use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::auth::FoundryCredential;
 
@@ -53,7 +53,7 @@ use azure_ai_foundry_core::auth::FoundryCredential;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = FoundryClient::builder()
         .endpoint("https://your-resource.services.ai.azure.com")
-        .credential(FoundryCredential::entra_id())
+        .credential(FoundryCredential::developer_tools()?)
         .build()?;
     Ok(())
 }
@@ -68,14 +68,18 @@ export AZURE_AI_FOUNDRY_ENDPOINT="https://your-resource.services.ai.azure.com"
 export AZURE_AI_FOUNDRY_API_KEY="your-key"  # Falls back to Entra ID if not set
 ```
 
-```rust
+```rust,no_run
 use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::auth::FoundryCredential;
 
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let endpoint = std::env::var("AZURE_AI_FOUNDRY_ENDPOINT")?;
 let client = FoundryClient::builder()
-    .endpoint_from_env()?
+    .endpoint(endpoint)
     .credential(FoundryCredential::from_env()?)
     .build()?;
+# Ok(())
+# }
 ```
 
 ## Modules

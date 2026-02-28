@@ -551,6 +551,24 @@ pub async fn analyze(
 
 /// Get the current result of an analyze operation.
 ///
+/// # Example
+///
+/// ```rust,no_run
+/// # use azure_ai_foundry_core::client::FoundryClient;
+/// # use azure_ai_foundry_tools::document_intelligence::{self, DocumentAnalysisRequest, PREBUILT_READ};
+/// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
+/// let request = DocumentAnalysisRequest::builder()
+///     .model_id(PREBUILT_READ)
+///     .url_source("https://example.com/doc.pdf")
+///     .build()?;
+///
+/// let operation = document_intelligence::analyze(client, &request).await?;
+/// let result = document_intelligence::get_result(client, &operation.operation_location).await?;
+/// println!("Status: {}", result.status);
+/// # Ok(())
+/// # }
+/// ```
+///
 /// # Tracing
 ///
 /// Emits a span named `foundry::document_intelligence::get_result`.
