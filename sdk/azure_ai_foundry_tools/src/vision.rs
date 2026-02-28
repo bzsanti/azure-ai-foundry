@@ -129,8 +129,13 @@ impl ImageAnalysisRequest {
         ImageAnalysisRequestBuilder::default()
     }
 
+    /// Returns the image URL set on this request.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
     /// Returns the features as a comma-separated query parameter value.
-    pub fn features_query_param(&self) -> String {
+    pub(crate) fn features_query_param(&self) -> String {
         self.features
             .iter()
             .map(|f| f.as_str())
@@ -238,7 +243,7 @@ impl ImageAnalysisRequestBuilder {
 
         if let Some(ref ratios) = self.smartcrops_aspect_ratios {
             for ratio in ratios {
-                if !(*ratio >= 0.75 && *ratio <= 1.80) {
+                if !(ratio.is_finite() && *ratio >= 0.75 && *ratio <= 1.80) {
                     return Err(FoundryError::Builder(format!(
                         "smartcrops aspect ratio {ratio} is outside valid range (0.75..=1.80)"
                     )));
@@ -478,7 +483,7 @@ pub async fn analyze(
     );
 
     // The body only contains the URL; features go in the query string.
-    let body = serde_json::json!({ "url": request.url });
+    let body = serde_json::json!({ "url": request.url() });
     let response = client.post(&path, &body).await?;
     let result = response.json::<ImageAnalysisResult>().await?;
 
@@ -496,6 +501,33 @@ mod tests {
     // -----------------------------------------------------------------------
     // Cycle 6: VisualFeature serialization
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_visual_feature_as_str_matches_serde() {
+        let variants = [
+            (VisualFeature::Tags, "tags"),
+            (VisualFeature::Caption, "caption"),
+            (VisualFeature::DenseCaptions, "denseCaptions"),
+            (VisualFeature::Objects, "objects"),
+            (VisualFeature::Read, "read"),
+            (VisualFeature::SmartCrops, "smartCrops"),
+            (VisualFeature::People, "people"),
+        ];
+
+        for (variant, expected) in &variants {
+            assert_eq!(
+                variant.as_str(),
+                *expected,
+                "as_str() mismatch for {expected}",
+            );
+            let serialized = serde_json::to_string(variant).expect("should serialize");
+            assert_eq!(
+                serialized,
+                format!("\"{expected}\""),
+                "serde rename mismatch for {expected}",
+            );
+        }
+    }
 
     #[test]
     fn test_visual_feature_serialization() {
@@ -572,6 +604,28 @@ mod tests {
     }
 
     #[test]
+    fn test_image_analysis_request_rejects_nan_aspect_ratio() {
+        let result = ImageAnalysisRequest::builder()
+            .url("https://example.com/img.png")
+            .features(vec![VisualFeature::SmartCrops])
+            .smartcrops_aspect_ratios(vec![f64::NAN])
+            .build();
+        let err = result.expect_err("NaN should be rejected");
+        assert!(err.to_string().contains("aspect ratio"), "error: {err}",);
+    }
+
+    #[test]
+    fn test_image_analysis_request_rejects_infinity_aspect_ratio() {
+        let result = ImageAnalysisRequest::builder()
+            .url("https://example.com/img.png")
+            .features(vec![VisualFeature::SmartCrops])
+            .smartcrops_aspect_ratios(vec![f64::INFINITY])
+            .build();
+        let err = result.expect_err("Infinity should be rejected");
+        assert!(err.to_string().contains("aspect ratio"), "error: {err}",);
+    }
+
+    #[test]
     fn test_image_analysis_request_rejects_invalid_aspect_ratio() {
         let result = ImageAnalysisRequest::builder()
             .url("https://example.com/img.png")
@@ -580,6 +634,16 @@ mod tests {
             .build();
         let err = result.expect_err("should reject invalid ratio");
         assert!(err.to_string().contains("aspect ratio"), "error: {err}");
+    }
+
+    #[test]
+    fn test_image_analysis_request_url_getter() {
+        let request = ImageAnalysisRequest::builder()
+            .url("https://example.com/image.jpg")
+            .features(vec![VisualFeature::Tags])
+            .build()
+            .expect("valid request");
+        assert_eq!(request.url(), "https://example.com/image.jpg");
     }
 
     // -----------------------------------------------------------------------
@@ -828,6 +892,33 @@ mod tests {
     // -----------------------------------------------------------------------
     // Cycle 12: Tracing span emission
     // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_analyze_emits_span_with_features_field() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        Mock::given(method("POST"))
+            .and(match_path("/computervision/imageanalysis:analyze"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "modelVersion": "2024-02-01",
+                "metadata": {"width": 100, "height": 100}
+            })))
+            .mount(&server)
+            .await;
+
+        let request = ImageAnalysisRequest::builder()
+            .url("https://example.com/img.jpg")
+            .features(vec![VisualFeature::Tags, VisualFeature::Caption])
+            .build()
+            .expect("valid request");
+
+        let _ = analyze(&client, &request).await;
+
+        // Verify the features field value appears in the trace output.
+        assert!(logs_contain("tags,caption"));
+    }
 
     #[tokio::test]
     #[tracing_test::traced_test]
