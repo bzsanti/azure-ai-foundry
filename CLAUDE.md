@@ -53,12 +53,17 @@ sdk/
 │   ├── chat.rs               # Chat completions + streaming
 │   └── embeddings.rs         # Vector embeddings
 │
-└── azure_ai_foundry_agents   # Agent Service APIs (depends on core)
-    ├── agent.rs              # Create, get, list, delete agents
-    ├── thread.rs             # Thread management
-    ├── message.rs            # Message management
-    ├── run.rs                # Run execution and polling
-    └── models.rs             # Shared types
+├── azure_ai_foundry_agents   # Agent Service APIs (depends on core)
+│   ├── agent.rs              # Create, get, list, delete agents
+│   ├── thread.rs             # Thread management
+│   ├── message.rs            # Message management
+│   ├── run.rs                # Run execution and polling
+│   └── models.rs             # Shared types
+│
+└── azure_ai_foundry_tools    # Vision & Document Intelligence (depends on core)
+    ├── vision.rs             # Image Analysis 4.0
+    ├── document_intelligence.rs  # Document Intelligence v4.0
+    └── models.rs             # Shared types (BoundingBox, ImageMetadata, etc.)
 ```
 
 ### Key Patterns
@@ -68,10 +73,6 @@ sdk/
 - **thiserror** for typed errors, **tracing** for logging
 - **secrecy** for sensitive values (API keys)
 - All public items require doc comments
-
-### Planned Crates (not yet implemented)
-
-- `azure_ai_foundry_tools` - Vision, Document Intelligence (v0.4.0)
 
 ## Code Style
 
@@ -135,70 +136,25 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-02-21)
-
-**Branch:** `develop/v0.3.0`
+## Session Status (2026-02-28)
 
 **v0.1.0 Status:** RELEASED
-**v0.2.0 Status:** RELEASED ✅
+**v0.2.0 Status:** RELEASED
+**v0.3.0 Status:** RELEASED
+**v0.4.0 Status:** RELEASED
 
 Published to crates.io:
-- https://crates.io/crates/azure_ai_foundry_core/0.2.0
-- https://crates.io/crates/azure_ai_foundry_models/0.2.0
+- https://crates.io/crates/azure_ai_foundry_core/0.4.0
+- https://crates.io/crates/azure_ai_foundry_models/0.4.0
+- https://crates.io/crates/azure_ai_foundry_agents/0.4.0
+- https://crates.io/crates/azure_ai_foundry_tools/0.4.0
 
-**v0.3.0 Status:** IN PROGRESS (Agents Crate + Security Fixes)
-
-**Completed Features v0.3.0:**
-- ✅ Tracing instrumentation
-- ✅ README updated for v0.2.0 release
-- ✅ FoundryClient fields made private (encapsulation)
-- ✅ Comprehensive quality fixes (13/13)
-- ✅ `azure_ai_foundry_agents` crate implemented
-- ✅ Security: Token refresh buffer increased to 120s (prevents race condition in slow networks)
-- ✅ Security: HTTPS validation in endpoint builder (HTTP only allowed for localhost)
-- ✅ Robustness: SSE parsing defensive check for empty lines
-
-**New: `azure_ai_foundry_agents` Crate:**
-
-| Module | Functions | Status |
-|--------|-----------|--------|
-| `agent` | create, get, list, delete | ✅ Complete |
-| `thread` | create, get, delete | ✅ Complete |
-| `message` | create, list, get | ✅ Complete |
-| `run` | create, get, create_thread_and_run, poll_until_complete | ✅ Complete |
-
-**Tracing Spans (agents crate):**
-
-| Span | Fields |
-|------|--------|
-| `foundry::agents::create` | model |
-| `foundry::agents::get` | agent_id |
-| `foundry::agents::list` | - |
-| `foundry::agents::delete` | agent_id |
-| `foundry::threads::create` | - |
-| `foundry::threads::get` | thread_id |
-| `foundry::threads::delete` | thread_id |
-| `foundry::messages::create` | thread_id |
-| `foundry::messages::list` | thread_id |
-| `foundry::messages::get` | thread_id, message_id |
-| `foundry::runs::create` | thread_id, assistant_id |
-| `foundry::runs::get` | thread_id, run_id |
-| `foundry::runs::create_thread_and_run` | assistant_id |
-| `foundry::runs::poll_until_complete` | thread_id, run_id |
-
-**Core Changes v0.3.0:**
-- Added `FoundryClient::delete()` method for DELETE requests
-- `get_token()` deprecated → use `fetch_fresh_token()`
-- `EmbeddingUsage` removed → use `Usage` from core
-- `AzureSdk` variant changed from `(String)` to `{ message, source }`
-- `TOKEN_EXPIRY_BUFFER` increased from 60s to 120s for slow network safety
-- HTTPS required for endpoints (except localhost for development)
-- SSE parsing defensive check for empty/short lines
-
-**Next Steps (v0.3.0):**
-- Integration tests for agents crate (OPTIONAL - ready for release)
-- `azure_ai_foundry_tools` crate (Vision, Document Intelligence) - moved to v0.4.0
+**v0.4.0 Highlights:**
+- New `azure_ai_foundry_tools` crate (Vision + Document Intelligence)
+- docs.rs documentation improvements (include_str!, README as crate docs)
+- 14 quality fixes applied via TDD cycles
 
 **Test Summary:**
-- 270 tests passing (113 core + 77 models + 42 agents + 38 doc-tests)
+- 347 tests passing (113 core + 77 models + 42 agents + 60 tools + 55 doc-tests)
 - All clippy checks passing (0 warnings)
+- All formatting checks passing

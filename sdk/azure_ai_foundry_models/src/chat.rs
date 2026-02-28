@@ -300,19 +300,35 @@ pub enum Role {
 /// A chat completion response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChatCompletionResponse {
+    /// Unique identifier for this completion.
     pub id: String,
+
+    /// Object type, always "chat.completion".
     pub object: String,
+
+    /// Unix timestamp when the completion was created.
     pub created: u64,
+
+    /// Model used for the completion.
     pub model: String,
+
+    /// List of choices (usually one for non-n requests).
     pub choices: Vec<Choice>,
+
+    /// Token usage statistics for the request.
     pub usage: Option<Usage>,
 }
 
 /// A single choice in a chat completion response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Choice {
+    /// Index of this choice.
     pub index: u32,
+
+    /// The assistant's response message.
     pub message: Message,
+
+    /// Reason the generation stopped (e.g. "stop", "length").
     pub finish_reason: Option<String>,
 }
 

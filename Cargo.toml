@@ -4,17 +4,16 @@ members = [
     "sdk/azure_ai_foundry_core",
     "sdk/azure_ai_foundry_models",
     "sdk/azure_ai_foundry_agents",
-    # "sdk/azure_ai_foundry_tools",   # Coming in v0.4.0
+    "sdk/azure_ai_foundry_tools",
 ]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/bzsanti/azure-ai-foundry"
 homepage = "https://github.com/bzsanti/azure-ai-foundry"
-documentation = "https://docs.rs/azure_ai_foundry_core"
 keywords = ["azure", "ai", "foundry", "microsoft", "openai"]
 categories = ["api-bindings", "web-programming::http-client"]
 

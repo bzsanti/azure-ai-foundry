@@ -1,6 +1,6 @@
 [package]
-name = "azure_ai_foundry_core"
-description = "Core types, authentication, and HTTP client for the Azure AI Foundry Rust SDK"
+name = "azure_ai_foundry_tools"
+description = "Vision and Document Intelligence clients for Azure AI Foundry - Rust SDK"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,25 +9,21 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-documentation = "https://docs.rs/azure_ai_foundry_core"
+documentation = "https://docs.rs/azure_ai_foundry_tools"
 
 [dependencies]
-azure_core.workspace = true
-azure_identity.workspace = true
-reqwest.workspace = true
+azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.4.0" }
 serde.workspace = true
 serde_json.workspace = true
-thiserror.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
 tracing.workspace = true
 url.workspace = true
-secrecy.workspace = true
-tokio.workspace = true
-fastrand.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock.workspace = true
-async-trait = "0.1"
-serial_test = "3.2"
-futures.workspace = true
 tracing-test = "0.2"
+
+[features]
+integration-tests = []
