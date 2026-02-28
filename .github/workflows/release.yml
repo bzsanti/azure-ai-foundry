@@ -138,7 +138,11 @@ jobs:
           echo "agents=$AGENTS_STATUS" >> $GITHUB_OUTPUT
           echo "Agents: $AGENTS_STATUS"
 
-      # Publish core first (models and agents depend on it)
+          TOOLS_STATUS=$(check_crate_status azure_ai_foundry_tools)
+          echo "tools=$TOOLS_STATUS" >> $GITHUB_OUTPUT
+          echo "Tools: $TOOLS_STATUS"
+
+      # Publish core first (models, agents, and tools depend on it)
       - name: Publish azure_ai_foundry_core
         if: steps.check-crates.outputs.core != 'published'
         run: cargo publish -p azure_ai_foundry_core
@@ -169,6 +173,18 @@ jobs:
         run: cargo publish -p azure_ai_foundry_agents
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.check-crates.outputs.agents == 'new' && secrets.CRATES_IO_TOKEN || steps.crates-auth.outputs.token }}
+
+      # Wait for crates.io to index
+      - name: Wait for crates.io indexing
+        if: steps.check-crates.outputs.agents != 'published'
+        run: sleep 30
+
+      # Publish tools (depends on core)
+      - name: Publish azure_ai_foundry_tools
+        if: steps.check-crates.outputs.tools != 'published'
+        run: cargo publish -p azure_ai_foundry_tools
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.check-crates.outputs.tools == 'new' && secrets.CRATES_IO_TOKEN || steps.crates-auth.outputs.token }}
 
   # Create GitHub Release
   github-release:
