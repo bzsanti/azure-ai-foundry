@@ -27,7 +27,7 @@ tokio = { version = "1", features = ["full"] }
 
 ### Create an Agent
 
-```rust
+```rust,no_run
 use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::auth::FoundryCredential;
 use azure_ai_foundry_agents::agent::{self, AgentCreateRequest};
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .model("gpt-4o")
         .name("My Assistant")
         .instructions("You are a helpful assistant.")
-        .build();
+        .build()?;
 
     let agent = agent::create(&client, &request).await?;
     println!("Created agent: {}", agent.id);
@@ -53,50 +53,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Run a Conversation
 
-```rust
-use azure_ai_foundry_agents::{agent, thread, message, run};
+```rust,no_run
+use azure_ai_foundry_core::client::FoundryClient;
+use azure_ai_foundry_agents::{thread, message, run};
 use azure_ai_foundry_agents::message::MessageCreateRequest;
 use azure_ai_foundry_agents::run::RunCreateRequest;
 use std::time::Duration;
 
+# async fn example(client: &FoundryClient, agent_id: &str) -> Result<(), Box<dyn std::error::Error>> {
 // Create a thread
-let thread = thread::create(&client, None).await?;
+let thread = thread::create(client, None).await?;
 
 // Add a message
 let msg_request = MessageCreateRequest::builder()
     .content("What is the weather in Paris?")
-    .build();
-message::create(&client, &thread.id, &msg_request).await?;
+    .build()?;
+message::create(client, &thread.id, &msg_request).await?;
 
 // Run the agent
 let run_request = RunCreateRequest::builder()
-    .assistant_id(&agent.id)
-    .build();
-let created_run = run::create(&client, &thread.id, &run_request).await?;
+    .assistant_id(agent_id)
+    .build()?;
+let created_run = run::create(client, &thread.id, &run_request).await?;
 
 // Poll until complete
 let completed_run = run::poll_until_complete(
-    &client,
+    client,
     &thread.id,
     &created_run.id,
     Duration::from_secs(1),
 ).await?;
 
 // Get the response
-let messages = message::list(&client, &thread.id).await?;
+let messages = message::list(client, &thread.id).await?;
 println!("Response: {:?}", messages.data[0].content);
+# Ok(())
+# }
 ```
 
 ### Create Thread and Run (Shorthand)
 
-```rust
+```rust,no_run
+use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_agents::run::{self, CreateThreadAndRunRequest};
 
+# async fn example(client: &FoundryClient, agent_id: &str) -> Result<(), Box<dyn std::error::Error>> {
 let request = CreateThreadAndRunRequest::builder()
-    .assistant_id(&agent.id)
-    .build();
+    .assistant_id(agent_id)
+    .build()?;
 
-let run = run::create_thread_and_run(&client, &request).await?;
+let run = run::create_thread_and_run(client, &request).await?;
+# Ok(())
+# }
 ```
 
 ## Modules

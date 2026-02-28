@@ -8,6 +8,8 @@ license.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
+readme = "README.md"
+documentation = "https://docs.rs/azure_ai_foundry_models"
 
 [dependencies]
 azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.3.0" }

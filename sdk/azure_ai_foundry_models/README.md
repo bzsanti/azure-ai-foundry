@@ -27,7 +27,7 @@ tokio = { version = "1", features = ["full"] }
 
 ### Chat Completions
 
-```rust
+```rust,no_run
 use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::auth::FoundryCredential;
 use azure_ai_foundry_models::chat::{ChatCompletionRequest, Message};
@@ -53,16 +53,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Streaming Chat Completions
 
-```rust
+```rust,no_run
+use azure_ai_foundry_core::client::FoundryClient;
+use azure_ai_foundry_core::auth::FoundryCredential;
 use azure_ai_foundry_models::chat::{ChatCompletionRequest, Message, complete_stream};
 use futures::StreamExt;
 
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+# let client = FoundryClient::builder()
+#     .endpoint("https://your-resource.services.ai.azure.com")
+#     .credential(FoundryCredential::api_key("your-key"))
+#     .build()?;
 let request = ChatCompletionRequest::builder()
     .model("gpt-4o")
     .message(Message::user("Tell me a story"))
     .build();
 
-let mut stream = complete_stream(&client, &request).await?;
+let stream = complete_stream(&client, &request).await?;
+let mut stream = std::pin::pin!(stream);
 
 while let Some(chunk) = stream.next().await {
     let chunk = chunk?;
@@ -70,13 +78,22 @@ while let Some(chunk) = stream.next().await {
         print!("{}", content);
     }
 }
+# Ok(())
+# }
 ```
 
 ### Embeddings
 
-```rust
+```rust,no_run
+use azure_ai_foundry_core::client::FoundryClient;
+use azure_ai_foundry_core::auth::FoundryCredential;
 use azure_ai_foundry_models::embeddings::{EmbeddingRequest, embed};
 
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+# let client = FoundryClient::builder()
+#     .endpoint("https://your-resource.services.ai.azure.com")
+#     .credential(FoundryCredential::api_key("your-key"))
+#     .build()?;
 let request = EmbeddingRequest::builder()
     .model("text-embedding-ada-002")
     .input("The quick brown fox jumps over the lazy dog")
@@ -84,11 +101,22 @@ let request = EmbeddingRequest::builder()
 
 let response = embed(&client, &request).await?;
 println!("Embedding dimensions: {}", response.data[0].embedding.len());
+# Ok(())
+# }
 ```
 
 ### Multiple Embeddings
 
-```rust
+```rust,no_run
+use azure_ai_foundry_core::client::FoundryClient;
+use azure_ai_foundry_core::auth::FoundryCredential;
+use azure_ai_foundry_models::embeddings::{EmbeddingRequest, embed};
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+# let client = FoundryClient::builder()
+#     .endpoint("https://your-resource.services.ai.azure.com")
+#     .credential(FoundryCredential::api_key("your-key"))
+#     .build()?;
 let request = EmbeddingRequest::builder()
     .model("text-embedding-ada-002")
     .inputs(vec![
@@ -102,6 +130,8 @@ let response = embed(&client, &request).await?;
 for (i, item) in response.data.iter().enumerate() {
     println!("Document {}: {} dimensions", i, item.embedding.len());
 }
+# Ok(())
+# }
 ```
 
 ## Modules
