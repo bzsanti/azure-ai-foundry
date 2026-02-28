@@ -53,12 +53,17 @@ sdk/
 │   ├── chat.rs               # Chat completions + streaming
 │   └── embeddings.rs         # Vector embeddings
 │
-└── azure_ai_foundry_agents   # Agent Service APIs (depends on core)
-    ├── agent.rs              # Create, get, list, delete agents
-    ├── thread.rs             # Thread management
-    ├── message.rs            # Message management
-    ├── run.rs                # Run execution and polling
-    └── models.rs             # Shared types
+├── azure_ai_foundry_agents   # Agent Service APIs (depends on core)
+│   ├── agent.rs              # Create, get, list, delete agents
+│   ├── thread.rs             # Thread management
+│   ├── message.rs            # Message management
+│   ├── run.rs                # Run execution and polling
+│   └── models.rs             # Shared types
+│
+└── azure_ai_foundry_tools    # Vision & Document Intelligence (depends on core)
+    ├── vision.rs             # Image Analysis 4.0
+    ├── document_intelligence.rs  # Document Intelligence v4.0
+    └── models.rs             # Shared types (BoundingBox, ImageMetadata, etc.)
 ```
 
 ### Key Patterns
@@ -68,10 +73,6 @@ sdk/
 - **thiserror** for typed errors, **tracing** for logging
 - **secrecy** for sensitive values (API keys)
 - All public items require doc comments
-
-### Planned Crates (not yet implemented)
-
-- `azure_ai_foundry_tools` - Vision, Document Intelligence (v0.4.0)
 
 ## Code Style
 
@@ -137,62 +138,23 @@ When implementing:
 
 ## Session Status (2026-02-28)
 
-**Branch:** `develop_santi`
-
 **v0.1.0 Status:** RELEASED
 **v0.2.0 Status:** RELEASED
 **v0.3.0 Status:** RELEASED
+**v0.4.0 Status:** RELEASED
 
 Published to crates.io:
-- https://crates.io/crates/azure_ai_foundry_core/0.3.0
-- https://crates.io/crates/azure_ai_foundry_models/0.3.0
-- https://crates.io/crates/azure_ai_foundry_agents/0.3.0
+- https://crates.io/crates/azure_ai_foundry_core/0.4.0
+- https://crates.io/crates/azure_ai_foundry_models/0.4.0
+- https://crates.io/crates/azure_ai_foundry_agents/0.4.0
+- https://crates.io/crates/azure_ai_foundry_tools/0.4.0
 
-**v0.4.0 Status:** IN PROGRESS (Tools Crate - Vision + Document Intelligence)
-
-**Completed Features v0.4.0:**
-- ✅ `azure_ai_foundry_tools` crate implemented (Vision + Document Intelligence)
-- ✅ Vision API: Image Analysis 4.0 (tags, caption, denseCaptions, objects, read, smartCrops, people)
-- ✅ Document Intelligence API: v4.0 with async polling pattern (prebuilt-read, prebuilt-layout, prebuilt-invoice, prebuilt-receipt, prebuilt-idDocument, prebuilt-businessCard)
-- ✅ Builder pattern for all request types with validation
-- ✅ Tracing instrumentation on all public async functions
-- ✅ Quality review completed (14 findings identified)
-- ✅ TDD quality fixes plan created
-- ✅ All 14 quality findings fixed via TDD cycles
-
-**Quality Fixes Applied (14/14):**
-- ✅ `poll_until_complete` now requires `max_attempts: u32` to prevent infinite loops
-- ✅ NaN/Infinity validation via `is_finite()` in smartcrops aspect ratios
-- ✅ Empty string filtering for `url_source`/`base64_source` in DocumentAnalysisRequest
-- ✅ `url()` public getter on ImageAnalysisRequest; `analyze()` uses getter
-- ✅ Missing Operation-Location header returns `FoundryError::Api` (was `MissingConfig`)
-- ✅ `AnalyzeOperationError` type + `error` field on `AnalyzeOperationResult`
-- ✅ `Display` impl for `AnalyzeResultStatus` (camelCase matching API)
-- ✅ `as_str()`/serde rename synchronization regression tests (both enums)
-- ✅ `DocumentAnalysisBody` and `body()` reduced to private visibility
-- ✅ `features_query_param()` reduced to `pub(crate)`
-- ✅ Malformed URL test for `get_result`
-- ✅ Tracing span field content verification tests (vision + doc intel)
-- ✅ README.md + `readme` key in Cargo.toml
-
-**`azure_ai_foundry_tools` Crate:**
-
-| Module | Functions | Status |
-|--------|-----------|--------|
-| `vision` | analyze | ✅ Complete |
-| `document_intelligence` | analyze, get_result, poll_until_complete(+max_attempts) | ✅ Complete |
-| `models` | BoundingBox, ImageMetadata, ImagePoint, API versions | ✅ Complete |
-
-**Tracing Spans (tools crate):**
-
-| Span | Fields |
-|------|--------|
-| `foundry::vision::analyze` | features |
-| `foundry::document_intelligence::analyze` | model_id |
-| `foundry::document_intelligence::get_result` | operation_location |
-| `foundry::document_intelligence::poll_until_complete` | operation_location |
+**v0.4.0 Highlights:**
+- New `azure_ai_foundry_tools` crate (Vision + Document Intelligence)
+- docs.rs documentation improvements (include_str!, README as crate docs)
+- 14 quality fixes applied via TDD cycles
 
 **Test Summary:**
-- 339 tests passing (113 core + 77 models + 42 agents + 60 tools + 47 doc-tests)
+- 347 tests passing (113 core + 77 models + 42 agents + 60 tools + 55 doc-tests)
 - All clippy checks passing (0 warnings)
 - All formatting checks passing
