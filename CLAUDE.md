@@ -158,13 +158,29 @@ Published to crates.io:
 - ✅ Tracing instrumentation on all public async functions
 - ✅ Quality review completed (14 findings identified)
 - ✅ TDD quality fixes plan created
+- ✅ All 14 quality findings fixed via TDD cycles
 
-**New: `azure_ai_foundry_tools` Crate:**
+**Quality Fixes Applied (14/14):**
+- ✅ `poll_until_complete` now requires `max_attempts: u32` to prevent infinite loops
+- ✅ NaN/Infinity validation via `is_finite()` in smartcrops aspect ratios
+- ✅ Empty string filtering for `url_source`/`base64_source` in DocumentAnalysisRequest
+- ✅ `url()` public getter on ImageAnalysisRequest; `analyze()` uses getter
+- ✅ Missing Operation-Location header returns `FoundryError::Api` (was `MissingConfig`)
+- ✅ `AnalyzeOperationError` type + `error` field on `AnalyzeOperationResult`
+- ✅ `Display` impl for `AnalyzeResultStatus` (camelCase matching API)
+- ✅ `as_str()`/serde rename synchronization regression tests (both enums)
+- ✅ `DocumentAnalysisBody` and `body()` reduced to private visibility
+- ✅ `features_query_param()` reduced to `pub(crate)`
+- ✅ Malformed URL test for `get_result`
+- ✅ Tracing span field content verification tests (vision + doc intel)
+- ✅ README.md + `readme` key in Cargo.toml
+
+**`azure_ai_foundry_tools` Crate:**
 
 | Module | Functions | Status |
 |--------|-----------|--------|
 | `vision` | analyze | ✅ Complete |
-| `document_intelligence` | analyze, get_result, poll_until_complete | ✅ Complete |
+| `document_intelligence` | analyze, get_result, poll_until_complete(+max_attempts) | ✅ Complete |
 | `models` | BoundingBox, ImageMetadata, ImagePoint, API versions | ✅ Complete |
 
 **Tracing Spans (tools crate):**
@@ -176,29 +192,7 @@ Published to crates.io:
 | `foundry::document_intelligence::get_result` | operation_location |
 | `foundry::document_intelligence::poll_until_complete` | operation_location |
 
-**Pending Quality Fixes (14 findings from code review):**
-
-Critical (must fix):
-1. `poll_until_complete` infinite loop — add `max_attempts` parameter
-2. NaN/Infinity validation in `smartcrops_aspect_ratios`
-3. Empty string validation for `url_source`/`base64_source`
-4. `url` field getter method (fragile private field access)
-
-Recommended (should fix):
-5. Missing README.md for crate
-6. Missing test for malformed Operation-Location URL
-7. `as_str()` / serde rename synchronization tests
-8. Wrong error variant for missing Operation-Location header
-9. `DocumentAnalysisBody` visibility reduction
-10. Missing `error` field in `AnalyzeOperationResult`
-
-Optional (nice to have):
-11. Tracing field content verification in tests
-12. `features_query_param()` visibility reduction
-13. `AnalyzeResultStatus` Display implementation
-14. Test cycle numbering gap
-
 **Test Summary:**
-- 325 tests passing (113 core + 77 models + 42 agents + 46 tools + 47 doc-tests)
+- 339 tests passing (113 core + 77 models + 42 agents + 60 tools + 47 doc-tests)
 - All clippy checks passing (0 warnings)
 - All formatting checks passing
