@@ -31,6 +31,7 @@
 //!     &client,
 //!     &operation.operation_location,
 //!     std::time::Duration::from_secs(2),
+//!     60,
 //! ).await?;
 //! # Ok(())
 //! # }
@@ -146,7 +147,7 @@ pub struct DocumentAnalysisRequest {
 
 /// The JSON body sent to the Document Intelligence analyze endpoint.
 #[derive(Debug, Serialize)]
-pub(crate) struct DocumentAnalysisBody {
+struct DocumentAnalysisBody {
     #[serde(rename = "urlSource", skip_serializing_if = "Option::is_none")]
     url_source: Option<String>,
 
@@ -161,7 +162,7 @@ impl DocumentAnalysisRequest {
     }
 
     /// Returns the JSON body for the API request.
-    pub(crate) fn body(&self) -> DocumentAnalysisBody {
+    fn body(&self) -> DocumentAnalysisBody {
         DocumentAnalysisBody {
             url_source: self.url_source.clone(),
             base64_source: self.base64_source.clone(),
@@ -255,8 +256,10 @@ impl DocumentAnalysisRequestBuilder {
             .filter(|m| !m.is_empty())
             .ok_or_else(|| FoundryError::Builder("model_id is required".into()))?;
 
-        let has_url = self.url_source.is_some();
-        let has_base64 = self.base64_source.is_some();
+        let url_source = self.url_source.filter(|s| !s.is_empty());
+        let base64_source = self.base64_source.filter(|s| !s.is_empty());
+        let has_url = url_source.is_some();
+        let has_base64 = base64_source.is_some();
 
         if !has_url && !has_base64 {
             return Err(FoundryError::Builder(
@@ -272,8 +275,8 @@ impl DocumentAnalysisRequestBuilder {
 
         Ok(DocumentAnalysisRequest {
             model_id,
-            url_source: self.url_source,
-            base64_source: self.base64_source,
+            url_source,
+            base64_source,
             pages: self.pages,
             locale: self.locale,
             features: self.features,
@@ -306,11 +309,35 @@ impl AnalyzeResultStatus {
     }
 }
 
+impl std::fmt::Display for AnalyzeResultStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::NotStarted => "notStarted",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        };
+        f.write_str(s)
+    }
+}
+
+/// An error returned by the Document Intelligence API when an operation fails.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AnalyzeOperationError {
+    /// The error code.
+    pub code: String,
+    /// Human-readable error description.
+    pub message: String,
+}
+
 /// The result returned when polling an analyze operation.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AnalyzeOperationResult {
     /// Current status of the operation.
     pub status: AnalyzeResultStatus,
+
+    /// Error details, present when status is `Failed`.
+    pub error: Option<AnalyzeOperationError>,
 
     /// The analysis result, present when status is `Succeeded`.
     #[serde(rename = "analyzeResult")]
@@ -512,8 +539,9 @@ pub async fn analyze(
         .get("Operation-Location")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string())
-        .ok_or_else(|| {
-            FoundryError::MissingConfig("Operation-Location header missing from response".into())
+        .ok_or_else(|| FoundryError::Api {
+            code: "MissingHeader".into(),
+            message: "Operation-Location header missing from response".into(),
         })?;
 
     tracing::debug!(operation_location = %operation_location, "document analysis submitted");
@@ -561,6 +589,19 @@ pub async fn get_result(
 /// or `Failed`. The caller should check the status to determine if the
 /// analysis succeeded.
 ///
+/// # Arguments
+///
+/// * `client` - The Foundry client.
+/// * `operation_location` - The URL returned by [`analyze`].
+/// * `poll_interval` - How often to check the status.
+/// * `max_attempts` - Maximum number of poll attempts before returning an error.
+///   Set to `0` to disable the limit (not recommended for production).
+///
+/// # Errors
+///
+/// Returns [`FoundryError::Api`] if `max_attempts` is exceeded before
+/// the operation reaches a terminal status.
+///
 /// # Example
 ///
 /// ```rust,no_run
@@ -571,6 +612,7 @@ pub async fn get_result(
 ///     client,
 ///     operation_location,
 ///     std::time::Duration::from_secs(2),
+///     60,
 /// ).await?;
 ///
 /// match result.status {
@@ -594,10 +636,25 @@ pub async fn poll_until_complete(
     client: &FoundryClient,
     operation_location: &str,
     poll_interval: Duration,
+    max_attempts: u32,
 ) -> FoundryResult<AnalyzeOperationResult> {
     tracing::debug!("starting to poll for completion");
 
+    let mut attempts = 0u32;
+
     loop {
+        if max_attempts > 0 {
+            attempts += 1;
+            if attempts > max_attempts {
+                return Err(FoundryError::Api {
+                    code: "PollTimeout".into(),
+                    message: format!(
+                        "poll_until_complete timed out after {max_attempts} max_attempts"
+                    ),
+                });
+            }
+        }
+
         let result = get_result(client, operation_location).await?;
 
         if result.status.is_terminal() {
@@ -605,7 +662,11 @@ pub async fn poll_until_complete(
             return Ok(result);
         }
 
-        tracing::trace!(status = ?result.status, "operation still in progress, waiting");
+        tracing::trace!(
+            status = ?result.status,
+            attempt = attempts,
+            "operation still in progress, waiting",
+        );
         tokio::time::sleep(poll_interval).await;
     }
 }
@@ -658,6 +719,32 @@ mod tests {
             .build();
         let err = result.expect_err("should reject both sources");
         assert!(err.to_string().contains("only one"), "error: {err}");
+    }
+
+    #[test]
+    fn test_doc_analysis_request_rejects_empty_url_source() {
+        let result = DocumentAnalysisRequest::builder()
+            .model_id(PREBUILT_READ)
+            .url_source("")
+            .build();
+        let err = result.expect_err("empty url_source should be rejected");
+        assert!(
+            err.to_string().contains("source"),
+            "error should mention source: {err}",
+        );
+    }
+
+    #[test]
+    fn test_doc_analysis_request_rejects_empty_base64_source() {
+        let result = DocumentAnalysisRequest::builder()
+            .model_id(PREBUILT_READ)
+            .base64_source("")
+            .build();
+        let err = result.expect_err("empty base64_source should be rejected");
+        assert!(
+            err.to_string().contains("source"),
+            "error should mention source: {err}",
+        );
     }
 
     #[test]
@@ -763,6 +850,14 @@ mod tests {
     }
 
     #[test]
+    fn test_analyze_result_status_display() {
+        assert_eq!(AnalyzeResultStatus::NotStarted.to_string(), "notStarted");
+        assert_eq!(AnalyzeResultStatus::Running.to_string(), "running");
+        assert_eq!(AnalyzeResultStatus::Succeeded.to_string(), "succeeded");
+        assert_eq!(AnalyzeResultStatus::Failed.to_string(), "failed");
+    }
+
+    #[test]
     fn test_analyze_operation_result_deserialization_succeeded() {
         let json = r#"{
             "status": "succeeded",
@@ -785,6 +880,24 @@ mod tests {
         assert_eq!(pages[0].page_number, 1);
         let words = pages[0].words.as_ref().expect("should have words");
         assert_eq!(words[0].content, "Hello");
+    }
+
+    #[test]
+    fn test_analyze_operation_result_failed_with_error_details() {
+        let json = r#"{
+            "status": "failed",
+            "error": {
+                "code": "InvalidRequest",
+                "message": "The document format is not supported."
+            }
+        }"#;
+        let result: AnalyzeOperationResult =
+            serde_json::from_str(json).expect("should deserialize");
+        assert_eq!(result.status, AnalyzeResultStatus::Failed);
+
+        let err = result.error.expect("should have error details");
+        assert_eq!(err.code, "InvalidRequest");
+        assert!(err.message.contains("not supported"));
     }
 
     #[test]
@@ -925,6 +1038,42 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_analyze_document_missing_operation_location_returns_api_error() {
+        use azure_ai_foundry_core::error::FoundryError;
+
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        Mock::given(method("POST"))
+            .and(match_path(
+                "/documentintelligence/documentModels/prebuilt-read:analyze",
+            ))
+            .respond_with(ResponseTemplate::new(202)) // no Operation-Location header
+            .mount(&server)
+            .await;
+
+        let request = DocumentAnalysisRequest::builder()
+            .model_id(PREBUILT_READ)
+            .url_source("https://example.com/doc.pdf")
+            .build()
+            .expect("valid request");
+
+        let err = analyze(&client, &request)
+            .await
+            .expect_err("should fail without Operation-Location");
+
+        // Must be Api variant, NOT MissingConfig
+        assert!(
+            matches!(err, FoundryError::Api { .. }),
+            "expected FoundryError::Api, got: {err:?}",
+        );
+        assert!(
+            err.to_string().contains("Operation-Location"),
+            "error: {err}",
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Cycle 18: get_result polling function
     // -----------------------------------------------------------------------
@@ -961,6 +1110,27 @@ mod tests {
         assert_eq!(result.status, AnalyzeResultStatus::Succeeded);
         let ar = result.analyze_result.expect("should have result");
         assert_eq!(ar.content.as_deref(), Some("Hello world"));
+    }
+
+    #[tokio::test]
+    async fn test_get_result_with_malformed_url_returns_invalid_endpoint() {
+        use azure_ai_foundry_core::error::FoundryError;
+
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        let err = get_result(&client, "not-a-valid-url")
+            .await
+            .expect_err("should fail with malformed URL");
+
+        assert!(
+            matches!(err, FoundryError::InvalidEndpoint { .. }),
+            "expected FoundryError::InvalidEndpoint, got: {err:?}",
+        );
+        assert!(
+            err.to_string().contains("Operation-Location"),
+            "error should mention Operation-Location: {err}",
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1004,7 +1174,7 @@ mod tests {
             server.uri(),
         );
 
-        let result = poll_until_complete(&client, &op_location, Duration::from_millis(10))
+        let result = poll_until_complete(&client, &op_location, Duration::from_millis(10), 10)
             .await
             .expect("should succeed");
         assert_eq!(result.status, AnalyzeResultStatus::Succeeded);
@@ -1032,10 +1202,47 @@ mod tests {
             server.uri(),
         );
 
-        let result = poll_until_complete(&client, &op_location, Duration::from_millis(10))
+        let result = poll_until_complete(&client, &op_location, Duration::from_millis(10), 10)
             .await
             .expect("should return Ok even on failed status");
         assert_eq!(result.status, AnalyzeResultStatus::Failed);
+    }
+
+    #[tokio::test]
+    async fn test_poll_until_complete_exceeds_max_attempts() {
+        use azure_ai_foundry_core::error::FoundryError;
+
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        // Always return "running" — will never terminate naturally
+        Mock::given(method("GET"))
+            .and(match_path(
+                "/documentintelligence/documentModels/prebuilt-read/analyzeResults/infinite",
+            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"status": "running"})),
+            )
+            .mount(&server)
+            .await;
+
+        let op_location = format!(
+            "{}/documentintelligence/documentModels/prebuilt-read/analyzeResults/infinite",
+            server.uri(),
+        );
+
+        let err = poll_until_complete(&client, &op_location, Duration::from_millis(1), 3)
+            .await
+            .expect_err("should fail after max_attempts exceeded");
+
+        assert!(
+            matches!(err, FoundryError::Api { .. }),
+            "expected FoundryError::Api, got: {err:?}",
+        );
+        assert!(
+            err.to_string().contains("max_attempts") || err.to_string().contains("timed out"),
+            "error: {err}",
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1158,6 +1365,40 @@ mod tests {
 
     #[tokio::test]
     #[tracing_test::traced_test]
+    async fn test_analyze_document_emits_span_with_model_id_field() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        let op_location = format!(
+            "{}/documentintelligence/documentModels/prebuilt-read/analyzeResults/res-field",
+            server.uri(),
+        );
+
+        Mock::given(method("POST"))
+            .and(match_path(
+                "/documentintelligence/documentModels/prebuilt-read:analyze",
+            ))
+            .respond_with(
+                ResponseTemplate::new(202)
+                    .append_header("Operation-Location", op_location.as_str()),
+            )
+            .mount(&server)
+            .await;
+
+        let request = DocumentAnalysisRequest::builder()
+            .model_id(PREBUILT_READ)
+            .url_source("https://example.com/doc.pdf")
+            .build()
+            .expect("valid request");
+
+        let _ = analyze(&client, &request).await;
+
+        // Verify the model_id field value appears in the trace output.
+        assert!(logs_contain("prebuilt-read"));
+    }
+
+    #[tokio::test]
+    #[tracing_test::traced_test]
     async fn test_poll_until_complete_emits_span() {
         let server = MockServer::start().await;
         let client = setup_mock_client(&server).await;
@@ -1181,7 +1422,7 @@ mod tests {
             server.uri(),
         );
 
-        let _ = poll_until_complete(&client, &op_location, Duration::from_millis(10)).await;
+        let _ = poll_until_complete(&client, &op_location, Duration::from_millis(10), 10).await;
         assert!(logs_contain(
             "foundry::document_intelligence::poll_until_complete"
         ));
@@ -1190,6 +1431,36 @@ mod tests {
     // -----------------------------------------------------------------------
     // DocumentAnalysisFeature serialization
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_document_analysis_feature_as_str_matches_serde() {
+        let variants = [
+            (
+                DocumentAnalysisFeature::OcrHighResolution,
+                "ocrHighResolution",
+            ),
+            (DocumentAnalysisFeature::Languages, "languages"),
+            (DocumentAnalysisFeature::Barcodes, "barcodes"),
+            (DocumentAnalysisFeature::Formulas, "formulas"),
+            (DocumentAnalysisFeature::KeyValuePairs, "keyValuePairs"),
+            (DocumentAnalysisFeature::StyleFont, "styleFont"),
+            (DocumentAnalysisFeature::QueryFields, "queryFields"),
+        ];
+
+        for (variant, expected) in &variants {
+            assert_eq!(
+                variant.as_str(),
+                *expected,
+                "as_str() mismatch for {expected}",
+            );
+            let serialized = serde_json::to_string(variant).expect("should serialize");
+            assert_eq!(
+                serialized,
+                format!("\"{expected}\""),
+                "serde rename mismatch for {expected}",
+            );
+        }
+    }
 
     #[test]
     fn test_document_analysis_feature_serialization() {

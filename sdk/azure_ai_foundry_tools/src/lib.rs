@@ -59,6 +59,7 @@
 //!     &client,
 //!     &operation.operation_location,
 //!     std::time::Duration::from_secs(2),
+//!     60,
 //! ).await?;
 //! # Ok(())
 //! # }
