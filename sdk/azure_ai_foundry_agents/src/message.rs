@@ -121,6 +121,52 @@ impl MessageCreateRequestBuilder {
     }
 }
 
+/// A request to update an existing message.
+///
+/// Azure AI Foundry uses POST for update operations.
+///
+/// ```rust
+/// use azure_ai_foundry_agents::message::MessageUpdateRequest;
+///
+/// let request = MessageUpdateRequest::builder()
+///     .metadata(serde_json::json!({"reviewed": true}))
+///     .build();
+/// ```
+#[derive(Debug, Clone, Serialize)]
+pub struct MessageUpdateRequest {
+    /// Optional new metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Builder for [`MessageUpdateRequest`].
+#[derive(Debug, Default)]
+pub struct MessageUpdateRequestBuilder {
+    metadata: Option<serde_json::Value>,
+}
+
+impl MessageUpdateRequest {
+    /// Create a new builder for `MessageUpdateRequest`.
+    pub fn builder() -> MessageUpdateRequestBuilder {
+        MessageUpdateRequestBuilder::default()
+    }
+}
+
+impl MessageUpdateRequestBuilder {
+    /// Set new metadata.
+    pub fn metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Build the request. All fields are optional, so this always succeeds.
+    pub fn build(self) -> MessageUpdateRequest {
+        MessageUpdateRequest {
+            metadata: self.metadata,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Common types
 // ---------------------------------------------------------------------------
@@ -327,6 +373,52 @@ pub async fn get(
     let response = client.get(&path).await?;
     let message = response.json::<Message>().await?;
 
+    Ok(message)
+}
+
+/// Update a message in a thread.
+///
+/// Azure AI Foundry uses POST for update operations.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use azure_ai_foundry_core::client::FoundryClient;
+/// # use azure_ai_foundry_agents::message::{self, MessageUpdateRequest};
+/// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
+/// let request = MessageUpdateRequest::builder()
+///     .metadata(serde_json::json!({"reviewed": true}))
+///     .build();
+///
+/// let msg = message::update(client, "thread_abc123", "msg_xyz789", &request).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Tracing
+///
+/// Emits a span named `foundry::messages::update` with fields `thread_id` and `message_id`.
+#[tracing::instrument(
+    name = "foundry::messages::update",
+    skip(client, request),
+    fields(thread_id = %thread_id, message_id = %message_id)
+)]
+pub async fn update(
+    client: &FoundryClient,
+    thread_id: &str,
+    message_id: &str,
+    request: &MessageUpdateRequest,
+) -> FoundryResult<Message> {
+    tracing::debug!("updating message");
+
+    let path = format!(
+        "/threads/{}/messages/{}?{}",
+        thread_id, message_id, API_VERSION
+    );
+    let response = client.post(&path, request).await?;
+    let message = response.json::<Message>().await?;
+
+    tracing::debug!("message updated");
     Ok(message)
 }
 
@@ -541,5 +633,134 @@ mod tests {
             .expect("should succeed");
 
         assert_eq!(message.id, "msg_xyz");
+    }
+
+    // --- Phase 7: Message Update Tests ---
+
+    #[test]
+    fn test_message_update_request_serialization() {
+        let request = MessageUpdateRequest::builder()
+            .metadata(serde_json::json!({"reviewed": true}))
+            .build();
+
+        let json = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(json["metadata"]["reviewed"], true);
+    }
+
+    #[test]
+    fn test_message_update_request_empty() {
+        let request = MessageUpdateRequest::builder().build();
+
+        let json = serde_json::to_value(&request).unwrap();
+
+        assert!(json.get("metadata").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_message_success() {
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "msg_xyz",
+            "object": "thread.message",
+            "created_at": TEST_TIMESTAMP,
+            "thread_id": "thread_abc",
+            "role": "user",
+            "content": [{"type": "text", "text": {"value": "Hello!", "annotations": []}}],
+            "metadata": {"reviewed": true}
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/threads/thread_abc/messages/msg_xyz"))
+            .and(body_json(serde_json::json!({
+                "metadata": {"reviewed": true}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = MessageUpdateRequest::builder()
+            .metadata(serde_json::json!({"reviewed": true}))
+            .build();
+
+        let message = update(&client, "thread_abc", "msg_xyz", &request)
+            .await
+            .expect("should succeed");
+
+        assert_eq!(message.id, "msg_xyz");
+        assert!(message.metadata.is_some());
+        assert_eq!(message.metadata.unwrap()["reviewed"], true);
+    }
+
+    #[tokio::test]
+    async fn test_update_message_with_metadata() {
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "msg_meta",
+            "object": "thread.message",
+            "created_at": TEST_TIMESTAMP,
+            "thread_id": "thread_abc",
+            "role": "assistant",
+            "content": [{"type": "text", "text": {"value": "Result", "annotations": []}}],
+            "metadata": {"feedback": "positive", "score": 5}
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/threads/thread_abc/messages/msg_meta"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = MessageUpdateRequest::builder()
+            .metadata(serde_json::json!({"feedback": "positive", "score": 5}))
+            .build();
+
+        let message = update(&client, "thread_abc", "msg_meta", &request)
+            .await
+            .expect("should succeed");
+
+        let meta = message.metadata.unwrap();
+        assert_eq!(meta["feedback"], "positive");
+        assert_eq!(meta["score"], 5);
+    }
+
+    // --- Quality: update() 404 error path ---
+
+    #[tokio::test]
+    async fn test_update_message_not_found() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/threads/thread_abc/messages/msg_missing"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "error": {
+                    "code": "NotFound",
+                    "message": "Message not found"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = MessageUpdateRequest::builder()
+            .metadata(serde_json::json!({"key": "value"}))
+            .build();
+
+        let result = update(&client, "thread_abc", "msg_missing", &request).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("NotFound") || err.to_string().contains("Message not found"),
+            "unexpected error message: {}",
+            err
+        );
     }
 }

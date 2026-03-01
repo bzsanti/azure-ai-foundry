@@ -51,6 +51,8 @@
 //! # }
 //! ```
 
+use std::time::Duration;
+
 use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
 use serde::{Deserialize, Serialize};
@@ -211,6 +213,26 @@ impl RunCreateRequestBuilder {
             max_completion_tokens: self.max_completion_tokens,
         })
     }
+}
+
+/// A tool output to submit for a tool call.
+///
+/// When a run reaches the `requires_action` status, you must submit outputs
+/// for each tool call before the run can continue.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolOutput {
+    /// The ID of the tool call this output is for.
+    pub tool_call_id: String,
+
+    /// The output of the tool call.
+    pub output: String,
+}
+
+/// Request to submit tool outputs for a run.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct SubmitToolOutputsRequest {
+    /// The tool outputs to submit.
+    pub tool_outputs: Vec<ToolOutput>,
 }
 
 /// Request to create a thread and run in a single call.
@@ -698,11 +720,22 @@ pub async fn poll_until_complete(
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Tracing
+///
+/// Emits a span named `foundry::runs::create_and_poll` with field `assistant_id`.
+#[tracing::instrument(
+    name = "foundry::runs::create_and_poll",
+    skip(client, request),
+    fields(assistant_id = %request.assistant_id)
+)]
 pub async fn create_and_poll(
     client: &FoundryClient,
     request: &CreateThreadAndRunRequest,
     poll_interval: std::time::Duration,
 ) -> FoundryResult<(Thread, Run)> {
+    tracing::debug!("creating thread, run, and polling until complete");
+
     let initial_run = create_thread_and_run(client, request).await?;
     let thread_id = initial_run.thread_id.clone();
 
@@ -715,12 +748,214 @@ pub async fn create_and_poll(
     Ok((thread, final_run))
 }
 
+/// Submit tool outputs for a run that requires action.
+///
+/// When a run reaches `RunStatus::RequiresAction`, use this function to provide
+/// the results of tool calls back to the agent.
+///
+/// # Arguments
+///
+/// * `client` - The Foundry client.
+/// * `thread_id` - The thread ID.
+/// * `run_id` - The run ID.
+/// * `tool_outputs` - The tool outputs to submit.
+///
+/// # Errors
+///
+/// Returns an error if `tool_outputs` is empty.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use azure_ai_foundry_core::client::FoundryClient;
+/// # use azure_ai_foundry_agents::run::{self, ToolOutput};
+/// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
+/// let outputs = vec![ToolOutput {
+///     tool_call_id: "call_abc".to_string(),
+///     output: "Sunny, 72°F".to_string(),
+/// }];
+///
+/// let run = run::submit_tool_outputs(client, "thread_xyz", "run_abc", &outputs).await?;
+/// println!("Run status after submission: {:?}", run.status);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Tracing
+///
+/// Emits a span named `foundry::runs::submit_tool_outputs` with fields `thread_id` and `run_id`.
+#[tracing::instrument(
+    name = "foundry::runs::submit_tool_outputs",
+    skip(client, tool_outputs),
+    fields(thread_id = %thread_id, run_id = %run_id, output_count = tool_outputs.len())
+)]
+pub async fn submit_tool_outputs(
+    client: &FoundryClient,
+    thread_id: &str,
+    run_id: &str,
+    tool_outputs: &[ToolOutput],
+) -> FoundryResult<Run> {
+    if tool_outputs.is_empty() {
+        return Err(FoundryError::Builder("tool_outputs cannot be empty".into()));
+    }
+
+    for output in tool_outputs {
+        if output.tool_call_id.trim().is_empty() {
+            return Err(FoundryError::Builder("tool_call_id cannot be empty".into()));
+        }
+    }
+
+    tracing::debug!("submitting tool outputs");
+
+    let path = format!(
+        "/threads/{}/runs/{}/submit_tool_outputs?{}",
+        thread_id, run_id, API_VERSION
+    );
+    let request = SubmitToolOutputsRequest {
+        tool_outputs: tool_outputs.to_vec(),
+    };
+    let response = client.post(&path, &request).await?;
+    let run = response.json::<Run>().await?;
+
+    tracing::debug!(status = ?run.status, "tool outputs submitted");
+    Ok(run)
+}
+
+/// Submit tool outputs and poll until the run reaches a terminal state.
+///
+/// Convenience function that combines [`submit_tool_outputs`] with [`poll_until_complete`].
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use azure_ai_foundry_core::client::FoundryClient;
+/// # use azure_ai_foundry_agents::run::{self, ToolOutput};
+/// # use std::time::Duration;
+/// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
+/// let outputs = vec![ToolOutput {
+///     tool_call_id: "call_abc".to_string(),
+///     output: "Result".to_string(),
+/// }];
+///
+/// let run = run::submit_tool_outputs_and_poll(
+///     client,
+///     "thread_xyz",
+///     "run_abc",
+///     &outputs,
+///     Duration::from_secs(1),
+/// ).await?;
+/// println!("Final status: {:?}", run.status);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Tracing
+///
+/// Emits a span named `foundry::runs::submit_tool_outputs_and_poll` with fields
+/// `thread_id`, `run_id`, and `output_count`.
+#[tracing::instrument(
+    name = "foundry::runs::submit_tool_outputs_and_poll",
+    skip(client, tool_outputs),
+    fields(thread_id = %thread_id, run_id = %run_id, output_count = tool_outputs.len())
+)]
+pub async fn submit_tool_outputs_and_poll(
+    client: &FoundryClient,
+    thread_id: &str,
+    run_id: &str,
+    tool_outputs: &[ToolOutput],
+    poll_interval: Duration,
+) -> FoundryResult<Run> {
+    tracing::debug!("submitting tool outputs and polling until complete");
+
+    let run = submit_tool_outputs(client, thread_id, run_id, tool_outputs).await?;
+
+    // If already terminal, return immediately
+    match run.status {
+        RunStatus::Completed
+        | RunStatus::Failed
+        | RunStatus::Cancelled
+        | RunStatus::Expired
+        | RunStatus::Incomplete => return Ok(run),
+        _ => {}
+    }
+
+    poll_until_complete(client, thread_id, &run.id, poll_interval).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_utils::{setup_mock_client, TEST_TIMESTAMP};
     use wiremock::matchers::{body_json, header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // --- Quality: create_and_poll tracing ---
+
+    #[tokio::test]
+    async fn test_create_and_poll_success() {
+        let server = MockServer::start().await;
+
+        // POST /threads/runs -> queued run
+        let run_response = serde_json::json!({
+            "id": "run_cp1",
+            "object": "thread.run",
+            "created_at": TEST_TIMESTAMP,
+            "thread_id": "thread_cp1",
+            "assistant_id": "asst_abc",
+            "status": "queued"
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/threads/runs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&run_response))
+            .mount(&server)
+            .await;
+
+        // GET /threads/thread_cp1 -> thread
+        let thread_response = serde_json::json!({
+            "id": "thread_cp1",
+            "object": "thread",
+            "created_at": TEST_TIMESTAMP,
+            "metadata": null
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_cp1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&thread_response))
+            .mount(&server)
+            .await;
+
+        // GET /threads/thread_cp1/runs/run_cp1 -> completed
+        let get_run_response = serde_json::json!({
+            "id": "run_cp1",
+            "object": "thread.run",
+            "created_at": TEST_TIMESTAMP,
+            "thread_id": "thread_cp1",
+            "assistant_id": "asst_abc",
+            "status": "completed"
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_cp1/runs/run_cp1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&get_run_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = CreateThreadAndRunRequest::builder()
+            .assistant_id("asst_abc")
+            .message("Hello!")
+            .build()
+            .expect("valid request");
+
+        let (thread, run) = create_and_poll(&client, &request, Duration::from_millis(10))
+            .await
+            .expect("should succeed");
+
+        assert_eq!(thread.id, "thread_cp1");
+        assert_eq!(run.status, RunStatus::Completed);
+    }
 
     // --- Cycle 16: Run types tests ---
 
@@ -968,5 +1203,187 @@ mod tests {
         assert_eq!(tool_calls.len(), 1);
         assert_eq!(tool_calls[0].id, "call_abc");
         assert_eq!(tool_calls[0].function.as_ref().unwrap().name, "get_weather");
+    }
+
+    // --- Phase 6: Submit Tool Outputs ---
+
+    #[test]
+    fn test_tool_output_serialization() {
+        let output = ToolOutput {
+            tool_call_id: "call_abc".to_string(),
+            output: "Sunny, 72°F".to_string(),
+        };
+
+        let json = serde_json::to_value(&output).unwrap();
+
+        assert_eq!(json["tool_call_id"], "call_abc");
+        assert_eq!(json["output"], "Sunny, 72°F");
+    }
+
+    #[test]
+    fn test_submit_tool_outputs_request_serialization() {
+        let request = SubmitToolOutputsRequest {
+            tool_outputs: vec![
+                ToolOutput {
+                    tool_call_id: "call_1".to_string(),
+                    output: "result1".to_string(),
+                },
+                ToolOutput {
+                    tool_call_id: "call_2".to_string(),
+                    output: "result2".to_string(),
+                },
+            ],
+        };
+
+        let json = serde_json::to_value(&request).unwrap();
+
+        let outputs = json["tool_outputs"].as_array().unwrap();
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0]["tool_call_id"], "call_1");
+        assert_eq!(outputs[1]["tool_call_id"], "call_2");
+    }
+
+    #[tokio::test]
+    async fn test_submit_tool_outputs_success() {
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "run_abc",
+            "object": "thread.run",
+            "created_at": TEST_TIMESTAMP,
+            "thread_id": "thread_xyz",
+            "assistant_id": "asst_123",
+            "status": "in_progress"
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/threads/thread_xyz/runs/run_abc/submit_tool_outputs"))
+            .and(header("Authorization", "Bearer test-api-key"))
+            .and(body_json(serde_json::json!({
+                "tool_outputs": [{
+                    "tool_call_id": "call_abc",
+                    "output": "Sunny, 72°F"
+                }]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let outputs = vec![ToolOutput {
+            tool_call_id: "call_abc".to_string(),
+            output: "Sunny, 72°F".to_string(),
+        }];
+
+        let run = submit_tool_outputs(&client, "thread_xyz", "run_abc", &outputs)
+            .await
+            .expect("should succeed");
+
+        assert_eq!(run.id, "run_abc");
+        assert_eq!(run.status, RunStatus::InProgress);
+    }
+
+    #[tokio::test]
+    async fn test_submit_tool_outputs_rejects_empty() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        let result = submit_tool_outputs(&client, "thread_xyz", "run_abc", &[]).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("tool_outputs cannot be empty"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_tool_outputs_validates_empty_tool_call_id() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        let outputs = vec![ToolOutput {
+            tool_call_id: "  ".to_string(),
+            output: "result".to_string(),
+        }];
+
+        let result = submit_tool_outputs(&client, "thread_xyz", "run_abc", &outputs).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("tool_call_id cannot be empty"));
+    }
+
+    #[test]
+    fn test_tool_output_with_json_output() {
+        let output = ToolOutput {
+            tool_call_id: "call_abc".to_string(),
+            output: r#"{"temperature": 72, "condition": "sunny"}"#.to_string(),
+        };
+
+        let json = serde_json::to_value(&output).unwrap();
+
+        assert_eq!(json["tool_call_id"], "call_abc");
+        assert_eq!(
+            json["output"],
+            r#"{"temperature": 72, "condition": "sunny"}"#
+        );
+    }
+
+    #[tokio::test]
+    async fn test_submit_tool_outputs_and_poll_success() {
+        let server = MockServer::start().await;
+
+        // First: submit returns in_progress
+        let submit_response = serde_json::json!({
+            "id": "run_poll",
+            "object": "thread.run",
+            "created_at": TEST_TIMESTAMP,
+            "thread_id": "thread_xyz",
+            "assistant_id": "asst_123",
+            "status": "in_progress"
+        });
+
+        Mock::given(method("POST"))
+            .and(path(
+                "/threads/thread_xyz/runs/run_poll/submit_tool_outputs",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&submit_response))
+            .mount(&server)
+            .await;
+
+        // Second: get returns completed
+        let get_response = serde_json::json!({
+            "id": "run_poll",
+            "object": "thread.run",
+            "created_at": TEST_TIMESTAMP,
+            "thread_id": "thread_xyz",
+            "assistant_id": "asst_123",
+            "status": "completed"
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_xyz/runs/run_poll"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&get_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let outputs = vec![ToolOutput {
+            tool_call_id: "call_abc".to_string(),
+            output: "result".to_string(),
+        }];
+
+        let run = submit_tool_outputs_and_poll(
+            &client,
+            "thread_xyz",
+            "run_poll",
+            &outputs,
+            Duration::from_millis(10),
+        )
+        .await
+        .expect("should succeed");
+
+        assert_eq!(run.status, RunStatus::Completed);
     }
 }

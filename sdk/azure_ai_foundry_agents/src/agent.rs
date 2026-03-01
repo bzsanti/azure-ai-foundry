@@ -263,6 +263,157 @@ pub struct FunctionDefinition {
     pub parameters: Option<serde_json::Value>,
 }
 
+/// A request to update an existing agent.
+///
+/// All fields are optional. Only set fields will be included in the request.
+/// Azure AI Foundry uses POST for update operations.
+///
+/// ```rust
+/// use azure_ai_foundry_agents::agent::AgentUpdateRequest;
+///
+/// let request = AgentUpdateRequest::builder()
+///     .name("Updated Agent")
+///     .instructions("New instructions.")
+///     .build()
+///     .expect("valid request");
+/// ```
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentUpdateRequest {
+    /// Optional new model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+
+    /// Optional new name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Optional new instructions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+
+    /// Optional new description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Optional new tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
+
+    /// Optional new metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+
+    /// Optional new temperature (0.0 to 2.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+
+    /// Optional new top_p (0.0 to 1.0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+}
+
+/// Builder for [`AgentUpdateRequest`].
+#[derive(Debug, Default)]
+pub struct AgentUpdateRequestBuilder {
+    model: Option<String>,
+    name: Option<String>,
+    instructions: Option<String>,
+    description: Option<String>,
+    tools: Option<Vec<Tool>>,
+    metadata: Option<serde_json::Value>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+}
+
+impl AgentUpdateRequest {
+    /// Create a new builder for `AgentUpdateRequest`.
+    pub fn builder() -> AgentUpdateRequestBuilder {
+        AgentUpdateRequestBuilder::default()
+    }
+}
+
+impl AgentUpdateRequestBuilder {
+    /// Set the new model.
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    /// Set the new name.
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Set the new instructions.
+    pub fn instructions(mut self, instructions: impl Into<String>) -> Self {
+        self.instructions = Some(instructions.into());
+        self
+    }
+
+    /// Set the new description.
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Set the new tools.
+    pub fn tools(mut self, tools: Vec<Tool>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    /// Set the new metadata.
+    pub fn metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Set the new temperature (0.0 to 2.0).
+    pub fn temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    /// Set the new top_p (0.0 to 1.0).
+    pub fn top_p(mut self, top_p: f32) -> Self {
+        self.top_p = Some(top_p);
+        self
+    }
+
+    /// Build the request, validating any provided parameters.
+    ///
+    /// All fields are optional. An empty update (no fields set) is allowed.
+    pub fn build(self) -> FoundryResult<AgentUpdateRequest> {
+        if let Some(temp) = self.temperature {
+            if !(0.0..=2.0).contains(&temp) {
+                return Err(FoundryError::Builder(
+                    "temperature must be between 0.0 and 2.0".into(),
+                ));
+            }
+        }
+
+        if let Some(top_p) = self.top_p {
+            if !(0.0..=1.0).contains(&top_p) {
+                return Err(FoundryError::Builder(
+                    "top_p must be between 0.0 and 1.0".into(),
+                ));
+            }
+        }
+
+        Ok(AgentUpdateRequest {
+            model: self.model,
+            name: self.name,
+            instructions: self.instructions,
+            description: self.description,
+            tools: self.tools,
+            metadata: self.metadata,
+            temperature: self.temperature,
+            top_p: self.top_p,
+        })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Response types
 // ---------------------------------------------------------------------------
@@ -478,6 +629,50 @@ pub async fn delete(
 
     tracing::debug!(deleted = result.deleted, "agent deletion complete");
     Ok(result)
+}
+
+/// Update an existing agent.
+///
+/// Azure AI Foundry uses POST for update operations.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use azure_ai_foundry_core::client::FoundryClient;
+/// # use azure_ai_foundry_agents::agent::{self, AgentUpdateRequest};
+/// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
+/// let request = AgentUpdateRequest::builder()
+///     .name("Updated Name")
+///     .instructions("New instructions.")
+///     .build()?;
+///
+/// let agent = agent::update(client, "asst_abc123", &request).await?;
+/// println!("Updated agent: {}", agent.name.unwrap_or_default());
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Tracing
+///
+/// Emits a span named `foundry::agents::update` with field `agent_id`.
+#[tracing::instrument(
+    name = "foundry::agents::update",
+    skip(client, request),
+    fields(agent_id = %agent_id)
+)]
+pub async fn update(
+    client: &FoundryClient,
+    agent_id: &str,
+    request: &AgentUpdateRequest,
+) -> FoundryResult<Agent> {
+    tracing::debug!("updating agent");
+
+    let path = format!("/assistants/{}?{}", agent_id, API_VERSION);
+    let response = client.post(&path, request).await?;
+    let agent = response.json::<Agent>().await?;
+
+    tracing::debug!("agent updated");
+    Ok(agent)
 }
 
 #[cfg(test)]
@@ -838,5 +1033,195 @@ mod tests {
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["type"], "function");
         assert_eq!(json["function"]["name"], "get_weather");
+    }
+
+    // --- Phase 7: Agent Update Tests ---
+
+    #[test]
+    fn test_agent_update_request_serialization() {
+        let request = AgentUpdateRequest::builder()
+            .name("Updated Agent")
+            .build()
+            .expect("valid request");
+
+        let json = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(json["name"], "Updated Agent");
+        assert!(json.get("model").is_none());
+        assert!(json.get("instructions").is_none());
+        assert!(json.get("temperature").is_none());
+    }
+
+    #[test]
+    fn test_agent_update_validates_temperature() {
+        let result = AgentUpdateRequest::builder().temperature(3.0).build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("temperature"));
+    }
+
+    #[test]
+    fn test_agent_update_validates_top_p() {
+        let result = AgentUpdateRequest::builder().top_p(1.5).build();
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("top_p"));
+    }
+
+    #[test]
+    fn test_agent_update_accepts_empty() {
+        let request = AgentUpdateRequest::builder().build();
+
+        assert!(request.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_update_agent_success() {
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "asst_abc123",
+            "object": "assistant",
+            "created_at": TEST_TIMESTAMP,
+            "model": TEST_MODEL,
+            "name": "Updated Agent"
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/assistants/asst_abc123"))
+            .and(body_json(serde_json::json!({"name": "Updated Agent"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = AgentUpdateRequest::builder()
+            .name("Updated Agent")
+            .build()
+            .expect("valid request");
+
+        let agent = update(&client, "asst_abc123", &request)
+            .await
+            .expect("should succeed");
+
+        assert_eq!(agent.id, "asst_abc123");
+        assert_eq!(agent.name, Some("Updated Agent".into()));
+    }
+
+    #[tokio::test]
+    async fn test_update_agent_full() {
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "asst_full",
+            "object": "assistant",
+            "created_at": TEST_TIMESTAMP,
+            "model": "gpt-4o-mini",
+            "name": "Full Update",
+            "instructions": "New instructions",
+            "description": "Updated description",
+            "temperature": 0.5,
+            "top_p": 0.8,
+            "tools": [{"type": "code_interpreter"}]
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/assistants/asst_full"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = AgentUpdateRequest::builder()
+            .model("gpt-4o-mini")
+            .name("Full Update")
+            .instructions("New instructions")
+            .description("Updated description")
+            .temperature(0.5)
+            .top_p(0.8)
+            .tools(vec![Tool::code_interpreter()])
+            .build()
+            .expect("valid request");
+
+        let agent = update(&client, "asst_full", &request)
+            .await
+            .expect("should succeed");
+
+        assert_eq!(agent.model, "gpt-4o-mini");
+        assert_eq!(agent.name, Some("Full Update".into()));
+    }
+
+    #[tokio::test]
+    async fn test_update_agent_with_tools() {
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "asst_tools",
+            "object": "assistant",
+            "created_at": TEST_TIMESTAMP,
+            "model": TEST_MODEL,
+            "tools": [
+                {"type": "code_interpreter"},
+                {"type": "file_search"}
+            ]
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/assistants/asst_tools"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = AgentUpdateRequest::builder()
+            .tools(vec![Tool::code_interpreter(), Tool::file_search()])
+            .build()
+            .expect("valid request");
+
+        let agent = update(&client, "asst_tools", &request)
+            .await
+            .expect("should succeed");
+
+        assert_eq!(agent.tools.as_ref().unwrap().len(), 2);
+    }
+
+    // --- Quality: update() 404 error path ---
+
+    #[tokio::test]
+    async fn test_update_agent_not_found() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/assistants/asst_missing"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "error": {
+                    "code": "NotFound",
+                    "message": "Agent not found"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = AgentUpdateRequest::builder()
+            .name("New Name")
+            .build()
+            .expect("valid request");
+
+        let result = update(&client, "asst_missing", &request).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("NotFound") || err.to_string().contains("Agent not found"),
+            "unexpected error message: {}",
+            err
+        );
     }
 }

@@ -606,6 +606,157 @@ impl FoundryClient {
         unreachable!("retry loop should return before reaching here")
     }
 
+    /// Send a POST request with a multipart form body to the API with automatic retry.
+    ///
+    /// The `form_builder` closure is called on each attempt because [`reqwest::multipart::Form`]
+    /// is not `Clone` — it must be rebuilt for each retry.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The API path to request.
+    /// * `form_builder` - A closure that builds the multipart form. Called on each attempt.
+    ///
+    /// # Tracing
+    ///
+    /// This method emits a span named `foundry::client::post_multipart` with the following fields:
+    /// - `path`: The API path being requested
+    /// - `attempt`: Current retry attempt (0-indexed)
+    /// - `status_code`: HTTP status code of the response
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authentication fails, the request fails after all retries,
+    /// or the server returns a non-retriable error response.
+    #[tracing::instrument(
+        name = "foundry::client::post_multipart",
+        skip(self, form_builder),
+        fields(path = %path, attempt, status_code)
+    )]
+    pub async fn post_multipart<F>(
+        &self,
+        path: &str,
+        form_builder: F,
+    ) -> FoundryResult<reqwest::Response>
+    where
+        F: Fn() -> reqwest::multipart::Form,
+    {
+        let url = self.url(path)?;
+
+        for attempt in 0..=self.retry_policy.max_retries {
+            let span = tracing::Span::current();
+            span.record("attempt", attempt);
+
+            let auth = self.credential.resolve().await?;
+
+            tracing::debug!("sending POST multipart request");
+
+            let form = form_builder();
+            let response = self
+                .http
+                .post(url.clone())
+                .header("Authorization", &auth)
+                .header("api-version", &self.api_version)
+                .multipart(form)
+                .send()
+                .await?;
+
+            let status = response.status().as_u16();
+            span.record("status_code", status);
+
+            if response.status().is_success() {
+                return Ok(response);
+            }
+
+            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
+                return Self::check_response(response).await;
+            }
+
+            tracing::warn!(
+                status = status,
+                attempt = attempt,
+                "retriable error, will retry"
+            );
+
+            let backoff = extract_retry_after_delay(response.headers())
+                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
+            tokio::time::sleep(backoff).await;
+        }
+
+        unreachable!("retry loop should return before reaching here")
+    }
+
+    /// Send a GET request and return the response body as raw bytes.
+    ///
+    /// Unlike [`Self::get`], this method consumes the response and returns the raw bytes
+    /// instead of a [`reqwest::Response`]. Useful for downloading file content.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The API path to request.
+    ///
+    /// # Tracing
+    ///
+    /// This method emits a span named `foundry::client::get_bytes` with the following fields:
+    /// - `path`: The API path being requested
+    /// - `attempt`: Current retry attempt (0-indexed)
+    /// - `status_code`: HTTP status code of the response
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authentication fails, the request fails after all retries,
+    /// or the server returns a non-retriable error response.
+    #[tracing::instrument(
+        name = "foundry::client::get_bytes",
+        skip(self),
+        fields(path = %path, attempt, status_code)
+    )]
+    pub async fn get_bytes(&self, path: &str) -> FoundryResult<bytes::Bytes> {
+        let url = self.url(path)?;
+
+        for attempt in 0..=self.retry_policy.max_retries {
+            let span = tracing::Span::current();
+            span.record("attempt", attempt);
+
+            let auth = self.credential.resolve().await?;
+
+            tracing::debug!("sending GET request for bytes");
+
+            let response = self
+                .http
+                .get(url.clone())
+                .header("Authorization", &auth)
+                .header("api-version", &self.api_version)
+                .send()
+                .await?;
+
+            let status = response.status().as_u16();
+            span.record("status_code", status);
+
+            if response.status().is_success() {
+                let data = response.bytes().await?;
+                return Ok(data);
+            }
+
+            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
+                return Err(Self::check_response(response)
+                    .await
+                    .expect_err("check_response must return Err for non-success status"));
+            }
+
+            tracing::warn!(
+                status = status,
+                attempt = attempt,
+                "retriable error, will retry"
+            );
+
+            let backoff = extract_retry_after_delay(response.headers())
+                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
+            tokio::time::sleep(backoff).await;
+        }
+
+        unreachable!("retry loop should return before reaching here")
+    }
+
     /// Maximum length for error messages to prevent sensitive data leaks.
     const MAX_ERROR_MESSAGE_LEN: usize = 1000;
 
@@ -2450,5 +2601,197 @@ mod tests {
             client.endpoint().as_str(),
             "https://test.services.ai.azure.com/"
         );
+    }
+
+    // --- post_multipart() Tests ---
+
+    #[tokio::test]
+    async fn test_post_multipart_sends_request() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/files"))
+            .and(header("Authorization", "Bearer test-api-key"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id": "file-abc", "object": "file"})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = FoundryClient::builder()
+            .endpoint(server.uri())
+            .credential(FoundryCredential::api_key("test-api-key"))
+            .build()
+            .expect("should build");
+
+        let response = client
+            .post_multipart("/files", || {
+                reqwest::multipart::Form::new()
+                    .text("purpose", "assistants")
+                    .part(
+                        "file",
+                        reqwest::multipart::Part::bytes(b"file content".to_vec())
+                            .file_name("test.txt"),
+                    )
+            })
+            .await
+            .expect("should succeed");
+
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["id"], "file-abc");
+    }
+
+    #[tokio::test]
+    async fn test_post_multipart_retries_on_503() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/files"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/files"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"id": "file-retry", "object": "file"})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = FoundryClient::builder()
+            .endpoint(server.uri())
+            .credential(FoundryCredential::api_key("test-api-key"))
+            .retry_policy(RetryPolicy::new(3, Duration::from_millis(10)).unwrap())
+            .build()
+            .expect("should build");
+
+        let response = client
+            .post_multipart("/files", || {
+                reqwest::multipart::Form::new().text("purpose", "assistants")
+            })
+            .await
+            .expect("should succeed after retry");
+
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["id"], "file-retry");
+    }
+
+    #[tokio::test]
+    async fn test_post_multipart_returns_error_on_400() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/files"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "error": {"code": "invalid_request", "message": "bad file"}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = FoundryClient::builder()
+            .endpoint(server.uri())
+            .credential(FoundryCredential::api_key("test-api-key"))
+            .build()
+            .expect("should build");
+
+        let result = client
+            .post_multipart("/files", || {
+                reqwest::multipart::Form::new().text("purpose", "assistants")
+            })
+            .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("bad file"));
+    }
+
+    // --- get_bytes() Tests ---
+
+    #[tokio::test]
+    async fn test_get_bytes_returns_raw_bytes() {
+        let server = MockServer::start().await;
+
+        let raw_content = b"hello world binary data";
+
+        Mock::given(method("GET"))
+            .and(path("/files/file-abc/content"))
+            .and(header("Authorization", "Bearer test-api-key"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(raw_content.to_vec()))
+            .mount(&server)
+            .await;
+
+        let client = FoundryClient::builder()
+            .endpoint(server.uri())
+            .credential(FoundryCredential::api_key("test-api-key"))
+            .build()
+            .expect("should build");
+
+        let bytes = client
+            .get_bytes("/files/file-abc/content")
+            .await
+            .expect("should succeed");
+
+        assert_eq!(bytes.as_ref(), raw_content);
+    }
+
+    #[tokio::test]
+    async fn test_get_bytes_retries_on_503() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/files/file-retry/content"))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/files/file-retry/content"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"retried data".to_vec()))
+            .mount(&server)
+            .await;
+
+        let client = FoundryClient::builder()
+            .endpoint(server.uri())
+            .credential(FoundryCredential::api_key("test-api-key"))
+            .retry_policy(RetryPolicy::new(3, Duration::from_millis(10)).unwrap())
+            .build()
+            .expect("should build");
+
+        let bytes = client
+            .get_bytes("/files/file-retry/content")
+            .await
+            .expect("should succeed after retry");
+
+        assert_eq!(bytes.as_ref(), b"retried data");
+    }
+
+    #[tokio::test]
+    async fn test_get_bytes_returns_error_on_404() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/files/file-missing/content"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "error": {"code": "not_found", "message": "file not found"}
+            })))
+            .mount(&server)
+            .await;
+
+        let client = FoundryClient::builder()
+            .endpoint(server.uri())
+            .credential(FoundryCredential::api_key("test-api-key"))
+            .build()
+            .expect("should build");
+
+        let result = client.get_bytes("/files/file-missing/content").await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("file not found"));
     }
 }
