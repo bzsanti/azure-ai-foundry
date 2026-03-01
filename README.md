@@ -23,9 +23,13 @@ An **unofficial** Rust SDK for [Microsoft Foundry](https://azure.microsoft.com/e
 | Crate | Description | Status |
 |-------|-------------|--------|
 | [`azure_ai_foundry_core`](./sdk/azure_ai_foundry_core) | Auth, HTTP client, shared types | ✅ Released |
-| [`azure_ai_foundry_models`](./sdk/azure_ai_foundry_models) | Chat completions, embeddings | ✅ Released |
-| [`azure_ai_foundry_agents`](./sdk/azure_ai_foundry_agents) | Agent Service (threads, runs) | ✅ Released |
-| `azure_ai_foundry_tools` | Vision, Document Intelligence | 📋 Planned (v0.4.0) |
+| [`azure_ai_foundry_models`](./sdk/azure_ai_foundry_models) | Chat completions, embeddings, audio, images | ✅ Released |
+| [`azure_ai_foundry_agents`](./sdk/azure_ai_foundry_agents) | Agent Service (threads, runs, vector stores) | ✅ Released |
+| [`azure_ai_foundry_tools`](./sdk/azure_ai_foundry_tools) | Vision, Document Intelligence | ✅ Released |
+| `azure_ai_foundry_safety` | Content Safety, Prompt Shields | 📋 Planned (v0.7.0) |
+| `azure_ai_foundry_language` | Text analytics, translation, PII | 📋 Planned (v0.8.0) |
+| `azure_ai_foundry_speech` | Speech-to-text, text-to-speech | 📋 Planned (v0.9.0) |
+| `azure_ai_foundry_realtime` | Realtime voice (WebSocket/WebRTC) | 📋 Planned (v0.12.0) |
 
 ## Quick Start
 
@@ -33,8 +37,8 @@ Add the dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.2"
-azure_ai_foundry_models = "0.2"
+azure_ai_foundry_core = "0.5"
+azure_ai_foundry_models = "0.5"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -73,7 +77,7 @@ let credential = FoundryCredential::api_key("your-api-key");
 
 ### Microsoft Entra ID (Azure AD)
 ```rust
-let credential = FoundryCredential::entra_id();
+let credential = FoundryCredential::developer_tools()?;
 ```
 
 ### Environment Variables
@@ -106,8 +110,86 @@ export AZURE_AI_FOUNDRY_API_KEY="your-key"  # Falls back to Entra ID if not set
 - [x] Security: HTTPS validation, token refresh hardening
 - [x] 270 tests passing
 
-### v0.4.0 (Planned)
-- [ ] Foundry Tools (Vision, Document Intelligence)
+### v0.4.0 ✅
+- [x] Foundry Tools crate (Vision API, Document Intelligence API)
+- [x] docs.rs documentation with `include_str!` pattern
+- [x] Quality review + 14 TDD-driven fixes
+- [x] 347 tests passing
+
+### v0.5.0 ✅
+- [x] File upload/download/list/delete (`/files` API)
+- [x] Vector stores CRUD (`/vector_stores` API)
+- [x] Vector store files and file batches
+- [x] Run steps — list and get (`/runs/{id}/steps`)
+- [x] Submit tool outputs (`/runs/{id}/submit_tool_outputs`)
+- [x] Agent, thread, and message update operations
+- [x] `post_multipart()` and `get_bytes()` on FoundryClient
+- [x] 451 tests passing
+
+### v0.6.0 — Models: Audio & Images
+- [ ] Audio transcription (Whisper STT)
+- [ ] Audio translation
+- [ ] Text-to-speech synthesis
+- [ ] Image generation (DALL-E, gpt-image-1)
+- [ ] Image editing
+- [ ] Responses API (`POST /responses`, `GET /responses/{id}`)
+
+### v0.7.0 — Content Safety
+New crate: `azure_ai_foundry_safety`
+- [ ] Text content analysis (hate, violence, sexual, self-harm)
+- [ ] Image content analysis
+- [ ] Prompt Shields (jailbreak detection)
+- [ ] Groundedness detection
+- [ ] Protected material detection (text + code)
+- [ ] Blocklist management (CRUD + items)
+- [ ] Custom categories (standard + rapid)
+
+### v0.8.0 — Language & Translation
+New crate: `azure_ai_foundry_language`
+- [ ] Text analytics (sentiment, NER, key phrases, language detection)
+- [ ] PII detection and redaction
+- [ ] Text summarization (extractive + abstractive)
+- [ ] Question answering
+- [ ] Conversational language understanding (CLU)
+- [ ] Text translation (translate, transliterate, detect, dictionary)
+- [ ] Document batch translation
+
+### v0.9.0 — Speech
+New crate: `azure_ai_foundry_speech`
+- [ ] Real-time speech-to-text
+- [ ] Fast transcription (synchronous)
+- [ ] Batch transcription (async)
+- [ ] Text-to-speech (SSML)
+- [ ] Voice listing
+
+### v0.10.0 — Advanced Models & Batch
+- [ ] Batch API (create, list, get, cancel)
+- [ ] Fine-tuning jobs (create, list, get, cancel, pause, resume, events, checkpoints)
+- [ ] Model listing and retrieval
+- [ ] Files API for OpenAI endpoint (upload, list, get, delete, content)
+- [ ] Evaluations API (evals, runs, output items)
+
+### v0.11.0 — Content Understanding & Extended Tools
+- [ ] Content Understanding API (multimodal: documents, images, audio, video)
+- [ ] Document Intelligence: custom model build/compose/copy/delete
+- [ ] Document Intelligence: classifiers
+- [ ] Vision: image/text vectorization endpoints
+- [ ] Face API (detect, verify, identify, person groups)
+
+### v0.12.0 — Realtime
+New crate: `azure_ai_foundry_realtime`
+- [ ] Realtime API via WebSocket (voice conversations)
+- [ ] Voice Live API via WebSocket (agent voice)
+- [ ] WebRTC session token management
+
+### v1.0.0 — Production Ready
+- [ ] Full API parity with Azure AI Foundry platform
+- [ ] Comprehensive integration test suite
+- [ ] Performance benchmarks
+- [ ] Migration guide from Python/C# SDKs
+- [ ] Stable public API (semver guarantee)
+
+> **Note:** An agent orchestration framework (agent loop, workflows, MCP, A2A, multi-agent) is planned as a **separate project** that uses this SDK as one of its providers. See [forja](https://github.com/bzsanti/forja) (coming soon).
 
 ## Contributing
 

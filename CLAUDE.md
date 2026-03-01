@@ -50,8 +50,11 @@ sdk/
 │   └── models.rs             # Common types
 │
 ├── azure_ai_foundry_models   # Model inference APIs (depends on core)
+│   ├── audio.rs              # Transcription, translation, text-to-speech
 │   ├── chat.rs               # Chat completions + streaming
-│   └── embeddings.rs         # Vector embeddings
+│   ├── embeddings.rs         # Vector embeddings
+│   ├── images.rs             # Image generation + editing
+│   └── responses.rs          # Responses API (create, get, delete)
 │
 ├── azure_ai_foundry_agents   # Agent Service APIs (depends on core)
 │   ├── agent.rs              # Create, get, list, delete agents
@@ -136,12 +139,14 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-02-28)
+## Session Status (2026-03-01)
 
 **v0.1.0 Status:** RELEASED
 **v0.2.0 Status:** RELEASED
 **v0.3.0 Status:** RELEASED
 **v0.4.0 Status:** RELEASED
+**v0.5.0 Status:** IMPLEMENTED (pending release)
+**v0.6.0 Status:** IMPLEMENTED (pending release)
 
 Published to crates.io:
 - https://crates.io/crates/azure_ai_foundry_core/0.4.0
@@ -149,12 +154,13 @@ Published to crates.io:
 - https://crates.io/crates/azure_ai_foundry_agents/0.4.0
 - https://crates.io/crates/azure_ai_foundry_tools/0.4.0
 
-**v0.4.0 Highlights:**
-- New `azure_ai_foundry_tools` crate (Vision + Document Intelligence)
-- docs.rs documentation improvements (include_str!, README as crate docs)
-- 14 quality fixes applied via TDD cycles
+**v0.6.0 Highlights:**
+- Audio transcription/translation (Whisper) and text-to-speech (TTS)
+- Image generation and editing (DALL-E)
+- Responses API (create, get, delete)
+- 79 new unit tests + 15 new doc-tests
 
 **Test Summary:**
-- 347 tests passing (113 core + 77 models + 42 agents + 60 tools + 55 doc-tests)
+- 558 tests passing (120 core + 156 models + 119 agents + 60 tools + 103 doc-tests)
 - All clippy checks passing (0 warnings)
 - All formatting checks passing

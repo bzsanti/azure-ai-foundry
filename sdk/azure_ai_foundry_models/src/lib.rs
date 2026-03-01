@@ -1,7 +1,10 @@
 #![doc = include_str!("../README.md")]
 
+pub mod audio;
 pub mod chat;
 pub mod embeddings;
+pub mod images;
+pub mod responses;
 
 /// Test utilities shared across modules.
 #[cfg(test)]
@@ -21,6 +24,18 @@ pub(crate) mod test_utils {
     /// Default test model for embeddings.
     #[allow(dead_code)]
     pub const TEST_EMBEDDING_MODEL: &str = "text-embedding-ada-002";
+
+    /// Default test model for audio transcription/translation.
+    #[allow(dead_code)]
+    pub const TEST_AUDIO_MODEL: &str = "whisper-1";
+
+    /// Default test model for text-to-speech.
+    #[allow(dead_code)]
+    pub const TEST_TTS_MODEL: &str = "tts-1";
+
+    /// Default test model for image generation.
+    #[allow(dead_code)]
+    pub const TEST_IMAGE_MODEL: &str = "dall-e-3";
 
     /// Test API key (not a real key).
     pub const TEST_API_KEY: &str = "test-api-key";
