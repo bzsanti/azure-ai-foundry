@@ -10,7 +10,7 @@ This crate provides the foundational building blocks used by all other `azure_ai
 
 ## Features
 
-- **FoundryClient** — HTTP client with builder pattern for Azure AI Foundry services
+- **FoundryClient** — HTTP client with builder pattern (`get`, `post`, `delete`, `post_multipart`, `get_bytes`)
 - **FoundryCredential** — Authentication via API key or Microsoft Entra ID
 - **FoundryError** — Typed error handling with `thiserror`
 - **Retry logic** — Automatic retries with exponential backoff for transient errors
@@ -21,7 +21,7 @@ This crate provides the foundational building blocks used by all other `azure_ai
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.4"
+azure_ai_foundry_core = "0.5"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -94,7 +94,8 @@ let client = FoundryClient::builder()
 ## Related Crates
 
 - [`azure_ai_foundry_models`](../azure_ai_foundry_models) — Chat completions and embeddings
-- [`azure_ai_foundry_agents`](../azure_ai_foundry_agents) — Agent Service (threads, runs)
+- [`azure_ai_foundry_agents`](../azure_ai_foundry_agents) — Agent Service (agents, threads, runs, files, vector stores)
+- [`azure_ai_foundry_tools`](../azure_ai_foundry_tools) — Vision and Document Intelligence
 
 ## License
 

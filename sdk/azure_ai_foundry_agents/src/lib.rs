@@ -1,10 +1,13 @@
 #![doc = include_str!("../README.md")]
 
 pub mod agent;
+pub mod file;
 pub mod message;
 pub mod models;
 pub mod run;
+pub mod run_step;
 pub mod thread;
+pub mod vector_store;
 
 /// Test utilities shared across modules.
 #[cfg(test)]

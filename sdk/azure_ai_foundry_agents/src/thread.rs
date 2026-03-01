@@ -48,6 +48,52 @@ pub struct ThreadCreateRequest {
     pub metadata: Option<serde_json::Value>,
 }
 
+/// A request to update an existing thread.
+///
+/// Azure AI Foundry uses POST for update operations.
+///
+/// ```rust
+/// use azure_ai_foundry_agents::thread::ThreadUpdateRequest;
+///
+/// let request = ThreadUpdateRequest::builder()
+///     .metadata(serde_json::json!({"user_id": "new_user"}))
+///     .build();
+/// ```
+#[derive(Debug, Clone, Serialize)]
+pub struct ThreadUpdateRequest {
+    /// Optional new metadata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Builder for [`ThreadUpdateRequest`].
+#[derive(Debug, Default)]
+pub struct ThreadUpdateRequestBuilder {
+    metadata: Option<serde_json::Value>,
+}
+
+impl ThreadUpdateRequest {
+    /// Create a new builder for `ThreadUpdateRequest`.
+    pub fn builder() -> ThreadUpdateRequestBuilder {
+        ThreadUpdateRequestBuilder::default()
+    }
+}
+
+impl ThreadUpdateRequestBuilder {
+    /// Set new metadata.
+    pub fn metadata(mut self, metadata: serde_json::Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Build the request. All fields are optional, so this always succeeds.
+    pub fn build(self) -> ThreadUpdateRequest {
+        ThreadUpdateRequest {
+            metadata: self.metadata,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Response types
 // ---------------------------------------------------------------------------
@@ -195,6 +241,48 @@ pub async fn delete(
 
     tracing::debug!(deleted = result.deleted, "thread deletion complete");
     Ok(result)
+}
+
+/// Update a thread.
+///
+/// Azure AI Foundry uses POST for update operations.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # use azure_ai_foundry_core::client::FoundryClient;
+/// # use azure_ai_foundry_agents::thread::{self, ThreadUpdateRequest};
+/// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
+/// let request = ThreadUpdateRequest::builder()
+///     .metadata(serde_json::json!({"status": "active"}))
+///     .build();
+///
+/// let thread = thread::update(client, "thread_abc123", &request).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Tracing
+///
+/// Emits a span named `foundry::threads::update` with field `thread_id`.
+#[tracing::instrument(
+    name = "foundry::threads::update",
+    skip(client, request),
+    fields(thread_id = %thread_id)
+)]
+pub async fn update(
+    client: &FoundryClient,
+    thread_id: &str,
+    request: &ThreadUpdateRequest,
+) -> FoundryResult<Thread> {
+    tracing::debug!("updating thread");
+
+    let path = format!("/threads/{}?{}", thread_id, API_VERSION);
+    let response = client.post(&path, request).await?;
+    let thread = response.json::<Thread>().await?;
+
+    tracing::debug!("thread updated");
+    Ok(thread)
 }
 
 #[cfg(test)]
@@ -345,5 +433,127 @@ mod tests {
 
         assert_eq!(result.id, "thread_abc123");
         assert!(result.deleted);
+    }
+
+    // --- Phase 7: Thread Update Tests ---
+
+    #[test]
+    fn test_thread_update_request_serialization() {
+        let request = ThreadUpdateRequest::builder()
+            .metadata(serde_json::json!({"status": "active"}))
+            .build();
+
+        let json = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(json["metadata"]["status"], "active");
+    }
+
+    #[test]
+    fn test_thread_update_request_empty() {
+        let request = ThreadUpdateRequest::builder().build();
+
+        let json = serde_json::to_value(&request).unwrap();
+
+        assert!(json.get("metadata").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_update_thread_success() {
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "thread_abc123",
+            "object": "thread",
+            "created_at": TEST_TIMESTAMP,
+            "metadata": {"status": "active"}
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/threads/thread_abc123"))
+            .and(body_json(serde_json::json!({
+                "metadata": {"status": "active"}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ThreadUpdateRequest::builder()
+            .metadata(serde_json::json!({"status": "active"}))
+            .build();
+
+        let thread = update(&client, "thread_abc123", &request)
+            .await
+            .expect("should succeed");
+
+        assert_eq!(thread.id, "thread_abc123");
+        assert!(thread.metadata.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_update_thread_with_metadata() {
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "thread_meta",
+            "object": "thread",
+            "created_at": TEST_TIMESTAMP,
+            "metadata": {"env": "production", "priority": "high"}
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/threads/thread_meta"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ThreadUpdateRequest::builder()
+            .metadata(serde_json::json!({"env": "production", "priority": "high"}))
+            .build();
+
+        let thread = update(&client, "thread_meta", &request)
+            .await
+            .expect("should succeed");
+
+        let meta = thread.metadata.unwrap();
+        assert_eq!(meta["env"], "production");
+        assert_eq!(meta["priority"], "high");
+    }
+
+    // --- Quality: update() 404 error path ---
+
+    #[tokio::test]
+    async fn test_update_thread_not_found() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/threads/thread_missing"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "error": {
+                    "code": "NotFound",
+                    "message": "Thread not found"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let request = ThreadUpdateRequest::builder()
+            .metadata(serde_json::json!({"key": "value"}))
+            .build();
+
+        let result = update(&client, "thread_missing", &request).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("NotFound") || err.to_string().contains("Thread not found"),
+            "unexpected error message: {}",
+            err
+        );
     }
 }
