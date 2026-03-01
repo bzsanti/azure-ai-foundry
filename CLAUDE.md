@@ -145,8 +145,8 @@ When implementing:
 **v0.2.0 Status:** RELEASED
 **v0.3.0 Status:** RELEASED
 **v0.4.0 Status:** RELEASED
-**v0.5.0 Status:** IMPLEMENTED (pending release)
-**v0.6.0 Status:** IMPLEMENTED (pending release)
+**v0.5.0 Status:** MERGED TO MAIN (pending release)
+**v0.6.0 Status:** MERGED TO MAIN (pending release)
 
 Published to crates.io:
 - https://crates.io/crates/azure_ai_foundry_core/0.4.0
@@ -154,13 +154,21 @@ Published to crates.io:
 - https://crates.io/crates/azure_ai_foundry_agents/0.4.0
 - https://crates.io/crates/azure_ai_foundry_tools/0.4.0
 
+**v0.5.0 Highlights:**
+- File upload/download/list/delete (/files API)
+- Vector stores CRUD with file and batch operations
+- Run steps list and get
+- Submit tool outputs with polling
+- Agent, thread, and message update operations
+- post_multipart() and get_bytes() on FoundryClient
+
 **v0.6.0 Highlights:**
 - Audio transcription/translation (Whisper) and text-to-speech (TTS)
 - Image generation and editing (DALL-E)
 - Responses API (create, get, delete)
-- 79 new unit tests + 15 new doc-tests
+- 13 quality fixes via TDD cycles
 
 **Test Summary:**
-- 558 tests passing (120 core + 156 models + 119 agents + 60 tools + 103 doc-tests)
+- 581 tests passing (119 core + 175 models + 120 agents + 60 tools + 107 doc-tests)
 - All clippy checks passing (0 warnings)
 - All formatting checks passing
