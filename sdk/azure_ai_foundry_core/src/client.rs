@@ -738,9 +738,10 @@ impl FoundryClient {
             }
 
             if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Err(Self::check_response(response)
-                    .await
-                    .expect_err("check_response must return Err for non-success status"));
+                return match Self::check_response(response).await {
+                    Err(e) => Err(e),
+                    Ok(_) => Err(FoundryError::http(status, "unexpected non-error response")),
+                };
             }
 
             tracing::warn!(
@@ -768,151 +769,113 @@ impl FoundryClient {
         let mut result = msg.to_string();
 
         // Sanitize Bearer tokens (format: "Bearer <token>")
-        // Use offset to avoid infinite loops
-        let mut search_start = 0;
-        while search_start < result.len() {
-            if let Some(relative_pos) = result[search_start..].find("Bearer ") {
-                let bearer_pos = search_start + relative_pos;
-                let token_start = bearer_pos + 7; // "Bearer " is 7 chars
-
-                if token_start < result.len() {
-                    // Skip if already redacted
-                    if result[token_start..].starts_with("[REDACTED]") {
-                        search_start = token_start + 10;
-                        continue;
-                    }
-
-                    // Find the end of the token (next whitespace/delimiter or end of string)
-                    let token_end = result[token_start..]
-                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
-                        .map(|pos| token_start + pos)
-                        .unwrap_or(result.len());
-
-                    if token_end > token_start {
-                        result.replace_range(token_start..token_end, "[REDACTED]");
-                        search_start = token_start + 10; // "[REDACTED]" is 10 chars
-                    } else {
-                        search_start = token_start;
-                    }
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
+        Self::redact_pattern_case_sensitive(&mut result, "Bearer ", true);
 
         // Sanitize sk- style API keys (OpenAI format)
-        search_start = 0;
-        while search_start < result.len() {
-            if let Some(relative_pos) = result[search_start..].find("sk-") {
-                let sk_pos = search_start + relative_pos;
-                let key_end = result[sk_pos..]
-                    .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
-                    .map(|pos| sk_pos + pos)
-                    .unwrap_or(result.len());
-
-                if key_end > sk_pos + 3 {
-                    result.replace_range(sk_pos..key_end, "[REDACTED]");
-                    search_start = sk_pos + 10; // "[REDACTED]" is 10 chars
-                } else {
-                    search_start = sk_pos + 3;
-                }
-            } else {
-                break;
-            }
-        }
+        Self::redact_pattern_case_sensitive(&mut result, "sk-", false);
 
         // Sanitize JWT tokens (Entra ID tokens starting with "eyJ")
-        // JWTs always start with "eyJ" because the header {"alg":...} encodes to this prefix
-        search_start = 0;
+        Self::redact_pattern_case_sensitive(&mut result, "eyJ", false);
+
+        // Sanitize header-style patterns (case-insensitive): "api-key:" and "ocp-apim-subscription-key:"
+        // Compute lowercase once and find all replacement ranges, then apply in reverse order.
+        Self::redact_header_value_case_insensitive(&mut result, "api-key:");
+        Self::redact_header_value_case_insensitive(&mut result, "ocp-apim-subscription-key:");
+
+        result
+    }
+
+    /// Redact values after a case-sensitive pattern (e.g., `"Bearer "`, `"sk-"`, `"eyJ"`).
+    ///
+    /// If `skip_prefix` is true, the pattern prefix is kept and only the value after it is redacted.
+    /// If false, the pattern and value are both replaced with `[REDACTED]`.
+    fn redact_pattern_case_sensitive(result: &mut String, pattern: &str, skip_prefix: bool) {
+        let redacted = "[REDACTED]";
+        let mut search_start = 0;
         while search_start < result.len() {
-            if let Some(relative_pos) = result[search_start..].find("eyJ") {
-                let jwt_pos = search_start + relative_pos;
-                // JWT tokens contain alphanumeric chars, dots, underscores, and hyphens (base64url + separators)
-                let jwt_end = result[jwt_pos..]
+            if let Some(relative_pos) = result[search_start..].find(pattern) {
+                let match_pos = search_start + relative_pos;
+                let value_start = if skip_prefix {
+                    match_pos + pattern.len()
+                } else {
+                    match_pos
+                };
+
+                if value_start >= result.len() {
+                    break;
+                }
+
+                // Skip if already redacted
+                if result[value_start..].starts_with(redacted) {
+                    search_start = value_start + redacted.len();
+                    continue;
+                }
+
+                let value_end = result[value_start..]
                     .find(|c: char| {
                         c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ')'
                     })
-                    .map(|pos| jwt_pos + pos)
+                    .map(|pos| value_start + pos)
                     .unwrap_or(result.len());
 
-                if jwt_end > jwt_pos + 3 {
-                    result.replace_range(jwt_pos..jwt_end, "[REDACTED]");
-                    search_start = jwt_pos + 10;
+                if value_end > value_start {
+                    result.replace_range(value_start..value_end, redacted);
+                    search_start = value_start + redacted.len();
                 } else {
-                    search_start = jwt_pos + 3;
+                    search_start = value_start + 1;
                 }
             } else {
                 break;
             }
         }
+    }
 
-        // Sanitize api-key: pattern (Azure style)
-        search_start = 0;
-        while search_start < result.len() {
-            // Case-insensitive search for "api-key:"
-            let lower = result[search_start..].to_lowercase();
-            if let Some(relative_pos) = lower.find("api-key:") {
-                let key_pos = search_start + relative_pos + 8; // "api-key:" is 8 chars
-                                                               // Skip any whitespace after the colon
+    /// Redact the value after a case-insensitive header pattern (e.g., `"api-key:"`).
+    ///
+    /// Computes the lowercase of the remaining string once per iteration to avoid
+    /// repeated `to_lowercase()` allocations. Collects all replacement ranges first,
+    /// then applies them in reverse order so earlier indices remain valid.
+    fn redact_header_value_case_insensitive(result: &mut String, header_lower: &str) {
+        let redacted = "[REDACTED]";
+        // Collect all (value_start, value_end) ranges to replace
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        let lower_result = result.to_lowercase();
+        let mut search_start = 0;
+
+        while search_start < lower_result.len() {
+            if let Some(relative_pos) = lower_result[search_start..].find(header_lower) {
+                let key_pos = search_start + relative_pos + header_lower.len();
+
+                // Skip whitespace after the colon
                 let value_start = result[key_pos..]
                     .find(|c: char| !c.is_whitespace())
                     .map(|pos| key_pos + pos)
                     .unwrap_or(result.len());
 
-                if value_start < result.len() {
-                    let value_end = result[value_start..]
-                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
-                        .map(|pos| value_start + pos)
-                        .unwrap_or(result.len());
-
-                    if value_end > value_start {
-                        result.replace_range(value_start..value_end, "[REDACTED]");
-                        search_start = value_start + 10;
-                    } else {
-                        search_start = value_start;
-                    }
-                } else {
+                if value_start >= result.len() {
                     break;
                 }
-            } else {
-                break;
-            }
-        }
 
-        // Sanitize Ocp-Apim-Subscription-Key: pattern (Azure API Management)
-        search_start = 0;
-        while search_start < result.len() {
-            let lower = result[search_start..].to_lowercase();
-            if let Some(relative_pos) = lower.find("ocp-apim-subscription-key:") {
-                let key_pos = search_start + relative_pos + 26; // header is 26 chars
-                let value_start = result[key_pos..]
-                    .find(|c: char| !c.is_whitespace())
-                    .map(|pos| key_pos + pos)
+                let value_end = result[value_start..]
+                    .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
+                    .map(|pos| value_start + pos)
                     .unwrap_or(result.len());
 
-                if value_start < result.len() {
-                    let value_end = result[value_start..]
-                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
-                        .map(|pos| value_start + pos)
-                        .unwrap_or(result.len());
-
-                    if value_end > value_start {
-                        result.replace_range(value_start..value_end, "[REDACTED]");
-                        search_start = value_start + 10;
-                    } else {
-                        search_start = value_start;
-                    }
+                if value_end > value_start {
+                    ranges.push((value_start, value_end));
+                    search_start = value_end;
                 } else {
-                    break;
+                    search_start = value_start + 1;
                 }
             } else {
                 break;
             }
         }
 
-        result
+        // Apply replacements in reverse order to preserve earlier indices
+        for (start, end) in ranges.into_iter().rev() {
+            result.replace_range(start..end, redacted);
+        }
     }
 
     /// Truncate a message if it exceeds the maximum length.
@@ -2316,6 +2279,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sanitize_multiple_api_key_headers() {
+        let msg = "api-key: secret1 and api-key: secret2 in headers";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("secret1"),
+            "First api-key value should be redacted"
+        );
+        assert!(
+            !result.contains("secret2"),
+            "Second api-key value should be redacted"
+        );
+        assert_eq!(
+            result.matches("[REDACTED]").count(),
+            2,
+            "Should have two redaction markers for two api-key headers"
+        );
+    }
+
+    #[test]
+    fn sanitize_mixed_case_ocp_apim() {
+        let msg = "OCP-APIM-SUBSCRIPTION-KEY: UPPER123 and ocp-apim-subscription-key: lower456";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("UPPER123"),
+            "Uppercase key value should be redacted"
+        );
+        assert!(
+            !result.contains("lower456"),
+            "Lowercase key value should be redacted"
+        );
+    }
+
     // --- Tracing Instrumentation Tests ---
 
     #[tokio::test]
@@ -2793,5 +2789,34 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("file not found"));
+    }
+
+    #[tokio::test]
+    async fn test_get_bytes_non_success_returns_error_safely() {
+        // Verify get_bytes handles non-success responses without panicking.
+        // Covers edge case where check_response might return Ok for a non-success status.
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/files/file-bad/content"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad request body"))
+            .mount(&server)
+            .await;
+
+        let client = FoundryClient::builder()
+            .endpoint(server.uri())
+            .credential(FoundryCredential::api_key("test-api-key"))
+            .build()
+            .expect("should build");
+
+        let result = client.get_bytes("/files/file-bad/content").await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("bad request body"),
+            "Expected error message to contain 'bad request body', got: {}",
+            err
+        );
     }
 }
