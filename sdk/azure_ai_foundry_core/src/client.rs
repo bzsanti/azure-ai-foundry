@@ -291,6 +291,55 @@ impl FoundryClient {
             .map_err(|e| FoundryError::invalid_endpoint_with_source("failed to construct URL", e))
     }
 
+    /// Internal retry loop shared by all HTTP methods.
+    ///
+    /// Handles credential resolution, retry/backoff, tracing span updates,
+    /// and error classification. The `build_and_send` closure constructs and
+    /// sends the request for each attempt, receiving the authorization header
+    /// value as its argument.
+    async fn execute_with_retry<F, Fut>(
+        &self,
+        build_and_send: F,
+    ) -> FoundryResult<reqwest::Response>
+    where
+        F: Fn(String) -> Fut,
+        Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
+    {
+        for attempt in 0..=self.retry_policy.max_retries {
+            let span = tracing::Span::current();
+            span.record("attempt", attempt);
+
+            // Resolve credential on each attempt to handle token expiration during retries.
+            // The internal cache ensures this is O(1) when the token is still valid.
+            let auth = self.credential.resolve().await?;
+
+            let response = build_and_send(auth).await?;
+
+            let status = response.status().as_u16();
+            span.record("status_code", status);
+
+            if response.status().is_success() {
+                return Ok(response);
+            }
+
+            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
+                return Self::check_response(response).await;
+            }
+
+            tracing::warn!(
+                status = status,
+                attempt = attempt,
+                "retriable error, will retry"
+            );
+
+            let backoff = extract_retry_after_delay(response.headers())
+                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
+            tokio::time::sleep(backoff).await;
+        }
+
+        unreachable!("retry loop should return before reaching here")
+    }
+
     /// Send a GET request to the API with automatic retry on transient errors.
     ///
     /// Automatically adds authentication headers and API version.
@@ -318,52 +367,16 @@ impl FoundryClient {
     )]
     pub async fn get(&self, path: &str) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
+        tracing::debug!("sending GET request");
 
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
-
-            // Resolve credential on each attempt to handle token expiration during retries.
-            // The internal cache ensures this is O(1) when the token is still valid.
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending GET request");
-
-            let response = self
-                .http
+        self.execute_with_retry(|auth| {
+            self.http
                 .get(url.clone())
-                .header("Authorization", &auth)
+                .header("Authorization", auth)
                 .header("api-version", &self.api_version)
                 .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            // Success - return response
-            if response.status().is_success() {
-                return Ok(response);
-            }
-
-            // Non-retriable error or last attempt - return error
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Self::check_response(response).await;
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            // Respect Retry-After header if present; otherwise use exponential backoff
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        // This should never be reached due to the loop logic
-        unreachable!("retry loop should return before reaching here")
+        })
+        .await
     }
 
     /// Send a POST request with a JSON body to the API with automatic retry.
@@ -398,52 +411,17 @@ impl FoundryClient {
         body: &T,
     ) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
+        tracing::debug!("sending POST request");
 
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
-
-            // Resolve credential on each attempt to handle token expiration during retries.
-            // The internal cache ensures this is O(1) when the token is still valid.
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending POST request");
-
-            let response = self
-                .http
+        self.execute_with_retry(|auth| {
+            self.http
                 .post(url.clone())
-                .header("Authorization", &auth)
+                .header("Authorization", auth)
                 .header("api-version", &self.api_version)
                 .json(body)
                 .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            // Success - return response
-            if response.status().is_success() {
-                return Ok(response);
-            }
-
-            // Non-retriable error or last attempt - return error
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Self::check_response(response).await;
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            // Respect Retry-After header if present; otherwise use exponential backoff
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        unreachable!("retry loop should return before reaching here")
+        })
+        .await
     }
 
     /// Send a DELETE request to the API with automatic retry on transient errors.
@@ -473,50 +451,16 @@ impl FoundryClient {
     )]
     pub async fn delete(&self, path: &str) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
+        tracing::debug!("sending DELETE request");
 
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
-
-            // Resolve credential on each attempt to handle token expiration during retries.
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending DELETE request");
-
-            let response = self
-                .http
+        self.execute_with_retry(|auth| {
+            self.http
                 .delete(url.clone())
-                .header("Authorization", &auth)
+                .header("Authorization", auth)
                 .header("api-version", &self.api_version)
                 .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            // Success - return response
-            if response.status().is_success() {
-                return Ok(response);
-            }
-
-            // Non-retriable error or last attempt - return error
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Self::check_response(response).await;
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            // Respect Retry-After header if present; otherwise use exponential backoff
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        unreachable!("retry loop should return before reaching here")
+        })
+        .await
     }
 
     /// Send a POST request for streaming responses.
@@ -553,57 +497,19 @@ impl FoundryClient {
         body: &T,
     ) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
+        let streaming_timeout = self.streaming_timeout;
+        tracing::debug!("sending POST request for streaming");
 
-        // Retry loop for pre-stream errors only (connection errors and retriable status codes)
-        // Once we receive a success response, the stream starts and we cannot retry.
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
-
-            // Resolve credential on each attempt to handle token expiration during retries.
-            // The internal cache ensures this is O(1) when the token is still valid.
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending POST request for streaming");
-
-            // Use streaming-specific timeout (longer than default for streaming responses)
-            let response = self
-                .http
+        self.execute_with_retry(|auth| {
+            self.http
                 .post(url.clone())
-                .header("Authorization", &auth)
+                .header("Authorization", auth)
                 .header("api-version", &self.api_version)
-                .timeout(self.streaming_timeout)
+                .timeout(streaming_timeout)
                 .json(body)
                 .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            // Success - return response for streaming (no more retries after this point)
-            if response.status().is_success() {
-                tracing::debug!("stream started");
-                return Ok(response);
-            }
-
-            // Non-retriable error or last attempt - return error
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Self::check_response(response).await;
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            // Respect Retry-After header if present; otherwise use exponential backoff
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        unreachable!("retry loop should return before reaching here")
+        })
+        .await
     }
 
     /// Send a POST request with a multipart form body to the API with automatic retry.
@@ -641,48 +547,18 @@ impl FoundryClient {
         F: Fn() -> reqwest::multipart::Form,
     {
         let url = self.url(path)?;
+        tracing::debug!("sending POST multipart request");
 
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
-
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending POST multipart request");
-
+        self.execute_with_retry(|auth| {
             let form = form_builder();
-            let response = self
-                .http
+            self.http
                 .post(url.clone())
-                .header("Authorization", &auth)
+                .header("Authorization", auth)
                 .header("api-version", &self.api_version)
                 .multipart(form)
                 .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            if response.status().is_success() {
-                return Ok(response);
-            }
-
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Self::check_response(response).await;
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        unreachable!("retry loop should return before reaching here")
+        })
+        .await
     }
 
     /// Send a GET request and return the response body as raw bytes.
@@ -712,50 +588,19 @@ impl FoundryClient {
     )]
     pub async fn get_bytes(&self, path: &str) -> FoundryResult<bytes::Bytes> {
         let url = self.url(path)?;
+        tracing::debug!("sending GET request for bytes");
 
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
+        let response = self
+            .execute_with_retry(|auth| {
+                self.http
+                    .get(url.clone())
+                    .header("Authorization", auth)
+                    .header("api-version", &self.api_version)
+                    .send()
+            })
+            .await?;
 
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending GET request for bytes");
-
-            let response = self
-                .http
-                .get(url.clone())
-                .header("Authorization", &auth)
-                .header("api-version", &self.api_version)
-                .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            if response.status().is_success() {
-                let data = response.bytes().await?;
-                return Ok(data);
-            }
-
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return match Self::check_response(response).await {
-                    Err(e) => Err(e),
-                    Ok(_) => Err(FoundryError::http(status, "unexpected non-error response")),
-                };
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        unreachable!("retry loop should return before reaching here")
+        Ok(response.bytes().await?)
     }
 
     /// Maximum length for error messages to prevent sensitive data leaks.
