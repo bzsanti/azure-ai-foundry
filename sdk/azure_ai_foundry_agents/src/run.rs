@@ -538,7 +538,7 @@ pub async fn create(
     request: &RunCreateRequest,
 ) -> FoundryResult<Run> {
     tracing::debug!("creating run");
-
+    FoundryClient::validate_resource_id(thread_id)?;
     let path = format!("/threads/{}/runs?{}", thread_id, API_VERSION);
     let response = client.post(&path, request).await?;
     let run = response.json::<Run>().await?;
@@ -577,7 +577,8 @@ pub async fn create(
 )]
 pub async fn get(client: &FoundryClient, thread_id: &str, run_id: &str) -> FoundryResult<Run> {
     tracing::debug!("getting run");
-
+    FoundryClient::validate_resource_id(thread_id)?;
+    FoundryClient::validate_resource_id(run_id)?;
     let path = format!("/threads/{}/runs/{}?{}", thread_id, run_id, API_VERSION);
     let response = client.get(&path).await?;
     let run = response.json::<Run>().await?;
@@ -805,6 +806,8 @@ pub async fn submit_tool_outputs(
         }
     }
 
+    FoundryClient::validate_resource_id(thread_id)?;
+    FoundryClient::validate_resource_id(run_id)?;
     tracing::debug!("submitting tool outputs");
 
     let path = format!(
@@ -1385,5 +1388,19 @@ mod tests {
         .expect("should succeed");
 
         assert_eq!(run.status, RunStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_get_run_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../evil", "run_123").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            "Expected Validation error, got: {:?}",
+            err
+        );
     }
 }

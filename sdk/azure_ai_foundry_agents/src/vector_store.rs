@@ -477,7 +477,7 @@ pub async fn create(
 )]
 pub async fn get(client: &FoundryClient, vector_store_id: &str) -> FoundryResult<VectorStore> {
     tracing::debug!("getting vector store");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!("/vector_stores/{}?{}", vector_store_id, API_VERSION);
     let response = client.get(&path).await?;
     let store = response.json::<VectorStore>().await?;
@@ -550,7 +550,7 @@ pub async fn update(
     request: &VectorStoreUpdateRequest,
 ) -> FoundryResult<VectorStore> {
     tracing::debug!("updating vector store");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!("/vector_stores/{}?{}", vector_store_id, API_VERSION);
     let response = client.post(&path, request).await?;
     let store = response.json::<VectorStore>().await?;
@@ -588,7 +588,7 @@ pub async fn delete(
     vector_store_id: &str,
 ) -> FoundryResult<VectorStoreDeletionResponse> {
     tracing::debug!("deleting vector store");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!("/vector_stores/{}?{}", vector_store_id, API_VERSION);
     let response = client.delete(&path).await?;
     let result = response.json::<VectorStoreDeletionResponse>().await?;
@@ -629,7 +629,7 @@ pub async fn add_file(
     file_id: &str,
 ) -> FoundryResult<VectorStoreFile> {
     tracing::debug!("adding file to vector store");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!("/vector_stores/{}/files?{}", vector_store_id, API_VERSION);
     let body = serde_json::json!({"file_id": file_id});
     let response = client.post(&path, &body).await?;
@@ -668,7 +668,7 @@ pub async fn list_files(
     vector_store_id: &str,
 ) -> FoundryResult<VectorStoreFileList> {
     tracing::debug!("listing vector store files");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!("/vector_stores/{}/files?{}", vector_store_id, API_VERSION);
     let response = client.get(&path).await?;
     let list = response.json::<VectorStoreFileList>().await?;
@@ -705,7 +705,8 @@ pub async fn get_file(
     file_id: &str,
 ) -> FoundryResult<VectorStoreFile> {
     tracing::debug!("getting vector store file");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
+    FoundryClient::validate_resource_id(file_id)?;
     let path = format!(
         "/vector_stores/{}/files/{}?{}",
         vector_store_id, file_id, API_VERSION
@@ -747,7 +748,8 @@ pub async fn delete_file(
     file_id: &str,
 ) -> FoundryResult<VectorStoreFileDeletionResponse> {
     tracing::debug!("deleting vector store file");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
+    FoundryClient::validate_resource_id(file_id)?;
     let path = format!(
         "/vector_stores/{}/files/{}?{}",
         vector_store_id, file_id, API_VERSION
@@ -794,7 +796,7 @@ pub async fn create_file_batch<S: AsRef<str>>(
     file_ids: &[S],
 ) -> FoundryResult<VectorStoreFileBatch> {
     tracing::debug!(file_count = file_ids.len(), "creating file batch");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!(
         "/vector_stores/{}/file_batches?{}",
         vector_store_id, API_VERSION
@@ -836,7 +838,8 @@ pub async fn get_file_batch(
     batch_id: &str,
 ) -> FoundryResult<VectorStoreFileBatch> {
     tracing::debug!("getting file batch");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
+    FoundryClient::validate_resource_id(batch_id)?;
     let path = format!(
         "/vector_stores/{}/file_batches/{}?{}",
         vector_store_id, batch_id, API_VERSION
@@ -1544,5 +1547,19 @@ mod tests {
         let result = create_file_batch(&client, "vs_abc", &ids).await;
 
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_vector_store_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../evil").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            "Expected Validation error, got: {:?}",
+            err
+        );
     }
 }

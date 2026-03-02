@@ -517,6 +517,7 @@ pub async fn create(
 )]
 pub async fn get(client: &FoundryClient, response_id: &str) -> FoundryResult<Response> {
     tracing::debug!("getting response");
+    FoundryClient::validate_resource_id(response_id)?;
 
     let path = format!("/openai/v1/responses/{}", response_id);
     let response = client.get(&path).await?;
@@ -553,6 +554,7 @@ pub async fn delete(
     response_id: &str,
 ) -> FoundryResult<ResponseDeletionResponse> {
     tracing::debug!("deleting response");
+    FoundryClient::validate_resource_id(response_id)?;
 
     let path = format!("/openai/v1/responses/{}", response_id);
     let response = client.delete(&path).await?;
@@ -1259,5 +1261,19 @@ mod tests {
         let _ = delete(&client, "resp_trace").await;
 
         assert!(logs_contain("foundry::responses::delete"));
+    }
+
+    #[tokio::test]
+    async fn test_get_response_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../etc/passwd").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            "Expected Validation error, got: {:?}",
+            err
+        );
     }
 }

@@ -235,7 +235,7 @@ pub async fn upload(
 )]
 pub async fn get(client: &FoundryClient, file_id: &str) -> FoundryResult<FileObject> {
     tracing::debug!("getting file");
-
+    FoundryClient::validate_resource_id(file_id)?;
     let path = format!("/files/{}?{}", file_id, API_VERSION);
     let response = client.get(&path).await?;
     let file = response.json::<FileObject>().await?;
@@ -300,7 +300,7 @@ pub async fn list(client: &FoundryClient) -> FoundryResult<FileList> {
 )]
 pub async fn delete(client: &FoundryClient, file_id: &str) -> FoundryResult<FileDeletionResponse> {
     tracing::debug!("deleting file");
-
+    FoundryClient::validate_resource_id(file_id)?;
     let path = format!("/files/{}?{}", file_id, API_VERSION);
     let response = client.delete(&path).await?;
     let result = response.json::<FileDeletionResponse>().await?;
@@ -335,7 +335,7 @@ pub async fn delete(client: &FoundryClient, file_id: &str) -> FoundryResult<File
 )]
 pub async fn download(client: &FoundryClient, file_id: &str) -> FoundryResult<bytes::Bytes> {
     tracing::debug!("downloading file content");
-
+    FoundryClient::validate_resource_id(file_id)?;
     let path = format!("/files/{}/content?{}", file_id, API_VERSION);
     let data = client.get_bytes(&path).await?;
 
@@ -695,5 +695,19 @@ mod tests {
         let content = download(&client, "file-abc").await.expect("should succeed");
 
         assert_eq!(content.as_ref(), raw_content);
+    }
+
+    #[tokio::test]
+    async fn test_get_file_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../evil").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            "Expected Validation error, got: {:?}",
+            err
+        );
     }
 }

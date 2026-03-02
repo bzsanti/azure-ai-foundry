@@ -554,7 +554,7 @@ pub async fn create(client: &FoundryClient, request: &AgentCreateRequest) -> Fou
 )]
 pub async fn get(client: &FoundryClient, agent_id: &str) -> FoundryResult<Agent> {
     tracing::debug!("getting agent");
-
+    FoundryClient::validate_resource_id(agent_id)?;
     let path = format!("/assistants/{}?{}", agent_id, API_VERSION);
     let response = client.get(&path).await?;
     let agent = response.json::<Agent>().await?;
@@ -622,7 +622,7 @@ pub async fn delete(
     agent_id: &str,
 ) -> FoundryResult<AgentDeletionResponse> {
     tracing::debug!("deleting agent");
-
+    FoundryClient::validate_resource_id(agent_id)?;
     let path = format!("/assistants/{}?{}", agent_id, API_VERSION);
     let response = client.delete(&path).await?;
     let result = response.json::<AgentDeletionResponse>().await?;
@@ -666,7 +666,7 @@ pub async fn update(
     request: &AgentUpdateRequest,
 ) -> FoundryResult<Agent> {
     tracing::debug!("updating agent");
-
+    FoundryClient::validate_resource_id(agent_id)?;
     let path = format!("/assistants/{}?{}", agent_id, API_VERSION);
     let response = client.post(&path, request).await?;
     let agent = response.json::<Agent>().await?;
@@ -1191,6 +1191,20 @@ mod tests {
     }
 
     // --- Quality: update() 404 error path ---
+
+    #[tokio::test]
+    async fn test_get_agent_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../etc/passwd").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+    }
 
     #[tokio::test]
     async fn test_update_agent_not_found() {

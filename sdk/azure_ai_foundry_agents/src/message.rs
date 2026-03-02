@@ -293,7 +293,7 @@ pub async fn create(
     request: &MessageCreateRequest,
 ) -> FoundryResult<Message> {
     tracing::debug!("creating message");
-
+    FoundryClient::validate_resource_id(thread_id)?;
     let path = format!("/threads/{}/messages?{}", thread_id, API_VERSION);
     let response = client.post(&path, request).await?;
     let message = response.json::<Message>().await?;
@@ -328,7 +328,7 @@ pub async fn create(
 )]
 pub async fn list(client: &FoundryClient, thread_id: &str) -> FoundryResult<MessageList> {
     tracing::debug!("listing messages");
-
+    FoundryClient::validate_resource_id(thread_id)?;
     let path = format!("/threads/{}/messages?{}", thread_id, API_VERSION);
     let response = client.get(&path).await?;
     let list = response.json::<MessageList>().await?;
@@ -365,7 +365,8 @@ pub async fn get(
     message_id: &str,
 ) -> FoundryResult<Message> {
     tracing::debug!("getting message");
-
+    FoundryClient::validate_resource_id(thread_id)?;
+    FoundryClient::validate_resource_id(message_id)?;
     let path = format!(
         "/threads/{}/messages/{}?{}",
         thread_id, message_id, API_VERSION
@@ -410,7 +411,8 @@ pub async fn update(
     request: &MessageUpdateRequest,
 ) -> FoundryResult<Message> {
     tracing::debug!("updating message");
-
+    FoundryClient::validate_resource_id(thread_id)?;
+    FoundryClient::validate_resource_id(message_id)?;
     let path = format!(
         "/threads/{}/messages/{}?{}",
         thread_id, message_id, API_VERSION
@@ -728,6 +730,20 @@ mod tests {
         let meta = message.metadata.unwrap();
         assert_eq!(meta["feedback"], "positive");
         assert_eq!(meta["score"], 5);
+    }
+
+    #[tokio::test]
+    async fn test_get_message_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../evil", "msg_123").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            "Expected Validation error, got: {:?}",
+            err
+        );
     }
 
     // --- Quality: update() 404 error path ---

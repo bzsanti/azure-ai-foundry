@@ -524,6 +524,7 @@ pub async fn analyze(
     request: &DocumentAnalysisRequest,
 ) -> FoundryResult<OperationStatus> {
     tracing::debug!("submitting document for analysis");
+    FoundryClient::validate_resource_id(&request.model_id)?;
 
     let path = format!(
         "/documentintelligence/documentModels/{}:analyze?{}",
@@ -1509,6 +1510,25 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&DocumentAnalysisFeature::QueryFields).unwrap(),
             r#""queryFields""#,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_analyze_rejects_path_traversal_model_id() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let request = DocumentAnalysisRequest::builder()
+            .model_id("../evil-model")
+            .url_source("https://example.com/doc.pdf")
+            .build()
+            .unwrap();
+        let result = analyze(&client, &request).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            "Expected Validation error, got: {:?}",
+            err
         );
     }
 }

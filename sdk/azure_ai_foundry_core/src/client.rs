@@ -925,6 +925,34 @@ impl FoundryClient {
             Err(FoundryError::http(status, Self::truncate_message(&body)))
         }
     }
+
+    /// Validate that a resource ID is safe for URL interpolation.
+    ///
+    /// Rejects IDs containing path traversal sequences, URL-unsafe characters,
+    /// or other values that could lead to path injection attacks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FoundryError::Validation`] if the ID is empty or contains
+    /// forbidden characters (`/`, `\`, `?`, `#`, `&`, `\0`, space, `..`).
+    pub fn validate_resource_id(id: &str) -> FoundryResult<()> {
+        if id.is_empty() {
+            return Err(FoundryError::validation("resource ID must not be empty"));
+        }
+        if id.contains("..") {
+            return Err(FoundryError::validation_field(
+                "id",
+                "resource ID must not contain path traversal sequences (..)",
+            ));
+        }
+        if id.contains(['/', '\\', '?', '#', '&', '\0', ' ']) {
+            return Err(FoundryError::validation_field(
+                "id",
+                "resource ID contains forbidden characters (/, \\, ?, #, &, NUL, or space)",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl FoundryClientBuilder {
@@ -2818,5 +2846,68 @@ mod tests {
             "Expected error message to contain 'bad request body', got: {}",
             err
         );
+    }
+
+    // --- validate_resource_id tests ---
+
+    #[test]
+    fn validate_resource_id_accepts_valid_azure_ids() {
+        let valid_ids = [
+            "asst_abc123",
+            "thread_xyz789",
+            "run_abc",
+            "file-abc123def",
+            "vs_abc",
+            "msg_123",
+            "step_abc",
+        ];
+        for id in valid_ids {
+            assert!(
+                FoundryClient::validate_resource_id(id).is_ok(),
+                "Expected '{}' to be accepted",
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn validate_resource_id_rejects_path_traversal() {
+        let result = FoundryClient::validate_resource_id("../etc/passwd");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, FoundryError::Validation { .. }),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+        assert!(err.to_string().contains("path traversal"));
+    }
+
+    #[test]
+    fn validate_resource_id_rejects_slashes() {
+        assert!(FoundryClient::validate_resource_id("foo/bar").is_err());
+        assert!(FoundryClient::validate_resource_id("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn validate_resource_id_rejects_empty() {
+        let result = FoundryClient::validate_resource_id("");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must not be empty"));
+    }
+
+    #[test]
+    fn validate_resource_id_rejects_query_injection() {
+        assert!(FoundryClient::validate_resource_id("id?param=value").is_err());
+        assert!(FoundryClient::validate_resource_id("id#fragment").is_err());
+        assert!(FoundryClient::validate_resource_id("id&other=1").is_err());
+    }
+
+    #[test]
+    fn validate_resource_id_rejects_null_bytes() {
+        assert!(FoundryClient::validate_resource_id("id\0evil").is_err());
     }
 }

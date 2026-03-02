@@ -253,7 +253,8 @@ pub async fn list(
     run_id: &str,
 ) -> FoundryResult<RunStepList> {
     tracing::debug!("listing run steps");
-
+    FoundryClient::validate_resource_id(thread_id)?;
+    FoundryClient::validate_resource_id(run_id)?;
     let path = format!(
         "/threads/{}/runs/{}/steps?{}",
         thread_id, run_id, API_VERSION
@@ -294,7 +295,9 @@ pub async fn get(
     step_id: &str,
 ) -> FoundryResult<RunStep> {
     tracing::debug!("getting run step");
-
+    FoundryClient::validate_resource_id(thread_id)?;
+    FoundryClient::validate_resource_id(run_id)?;
+    FoundryClient::validate_resource_id(step_id)?;
     let path = format!(
         "/threads/{}/runs/{}/steps/{}?{}",
         thread_id, run_id, step_id, API_VERSION
@@ -602,5 +605,19 @@ mod tests {
             .expect("should succeed");
 
         assert!(steps.data.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_run_step_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../evil", "run_123", "step_123").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            "Expected Validation error, got: {:?}",
+            err
+        );
     }
 }
