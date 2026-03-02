@@ -55,6 +55,7 @@ use std::time::Duration;
 
 use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
+use azure_ai_foundry_core::models::Usage;
 use serde::{Deserialize, Serialize};
 
 use crate::models::API_VERSION;
@@ -462,7 +463,7 @@ pub struct Run {
     pub instructions: Option<String>,
 
     /// Usage statistics for the run.
-    pub usage: Option<RunUsage>,
+    pub usage: Option<Usage>,
 
     /// Metadata attached to the run.
     pub metadata: Option<serde_json::Value>,
@@ -520,18 +521,9 @@ pub struct RunError {
     pub message: String,
 }
 
-/// Usage statistics for a run.
-#[derive(Debug, Clone, Deserialize)]
-pub struct RunUsage {
-    /// Number of prompt tokens used.
-    pub prompt_tokens: u32,
-
-    /// Number of completion tokens used.
-    pub completion_tokens: u32,
-
-    /// Total tokens used.
-    pub total_tokens: u32,
-}
+/// Deprecated: Use [`azure_ai_foundry_core::models::Usage`] instead.
+#[deprecated(since = "0.7.0", note = "Use azure_ai_foundry_core::models::Usage instead")]
+pub type RunUsage = Usage;
 
 // ---------------------------------------------------------------------------
 // API functions
@@ -1099,7 +1091,38 @@ mod tests {
         assert_eq!(run.id, "run_abc123");
         assert_eq!(run.status, RunStatus::Completed);
         assert!(run.usage.is_some());
-        assert_eq!(run.usage.as_ref().unwrap().total_tokens, 150);
+        let usage = run.usage.as_ref().unwrap();
+        assert_eq!(usage.total_tokens, 150);
+        assert_eq!(usage.prompt_tokens, 100);
+        assert_eq!(usage.completion_tokens, Some(50));
+    }
+
+    #[test]
+    fn test_run_deserializes_with_core_usage_type() {
+        // Verifies that the core Usage type (with Option<u32> completion_tokens)
+        // correctly deserializes from run JSON (where completion_tokens is always present).
+        let json = serde_json::json!({
+            "id": "run_usage_test",
+            "object": "thread.run",
+            "created_at": TEST_TIMESTAMP,
+            "thread_id": "thread_xyz",
+            "assistant_id": "asst_123",
+            "status": "completed",
+            "model": "gpt-4o",
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 100,
+                "total_tokens": 300
+            }
+        });
+
+        let run: Run = serde_json::from_value(json).unwrap();
+        let usage = run.usage.expect("should have usage");
+
+        // Core Usage type wraps completion_tokens in Option
+        assert_eq!(usage.prompt_tokens, 200);
+        assert_eq!(usage.completion_tokens, Some(100));
+        assert_eq!(usage.total_tokens, 300);
     }
 
     // --- Cycle 17: Create run API tests ---
