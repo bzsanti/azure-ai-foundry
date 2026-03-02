@@ -23,7 +23,7 @@
 //! // Add a user message
 //! let request = MessageCreateRequest::builder()
 //!     .content("Hello, can you help me?")
-//!     .build()?;
+//!     .try_build()?;
 //!
 //! let msg = message::create(&client, &thread.id, &request).await?;
 //! println!("Created message: {}", msg.id);
@@ -104,7 +104,7 @@ impl MessageCreateRequestBuilder {
     /// # Errors
     ///
     /// Returns an error if `content` is not set.
-    pub fn build(self) -> FoundryResult<MessageCreateRequest> {
+    pub fn try_build(self) -> FoundryResult<MessageCreateRequest> {
         let content = self
             .content
             .ok_or_else(|| FoundryError::Builder("content is required".into()))?;
@@ -118,6 +118,13 @@ impl MessageCreateRequestBuilder {
             content,
             metadata: self.metadata,
         })
+    }
+
+    /// Build the request. Panics if required fields are missing.
+    ///
+    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    pub fn build(self) -> MessageCreateRequest {
+        self.try_build().expect("builder validation failed")
     }
 }
 
@@ -271,7 +278,7 @@ pub struct MessageList {
 /// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
 /// let request = MessageCreateRequest::builder()
 ///     .content("What is 2+2?")
-///     .build()?;
+///     .try_build()?;
 ///
 /// let msg = message::create(client, "thread_abc123", &request).await?;
 /// println!("Created message: {}", msg.id);
@@ -461,8 +468,7 @@ mod tests {
     fn test_message_request_serialization() {
         let request = MessageCreateRequest::builder()
             .content("Hello!")
-            .build()
-            .expect("valid request");
+            .build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -472,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_message_builder_requires_content() {
-        let result = MessageCreateRequest::builder().build();
+        let result = MessageCreateRequest::builder().try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -481,7 +487,7 @@ mod tests {
 
     #[test]
     fn test_message_builder_rejects_empty_content() {
-        let result = MessageCreateRequest::builder().content("   ").build();
+        let result = MessageCreateRequest::builder().content("   ").try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -551,8 +557,7 @@ mod tests {
 
         let request = MessageCreateRequest::builder()
             .content("What is 2+2?")
-            .build()
-            .expect("valid request");
+            .build();
 
         let message = create(&client, "thread_abc", &request)
             .await

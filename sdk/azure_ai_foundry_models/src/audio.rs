@@ -158,6 +158,23 @@ pub struct TranscriptionRequestBuilder {
     temperature: Option<f32>,
 }
 
+impl std::fmt::Debug for TranscriptionRequestBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TranscriptionRequestBuilder")
+            .field("model", &self.model)
+            .field("filename", &self.filename)
+            .field(
+                "data",
+                &self.data.as_ref().map(|d| format!("<{} bytes>", d.len())),
+            )
+            .field("language", &self.language)
+            .field("prompt", &self.prompt)
+            .field("response_format", &self.response_format)
+            .field("temperature", &self.temperature)
+            .finish()
+    }
+}
+
 impl TranscriptionRequestBuilder {
     /// Set the model ID.
     pub fn model(mut self, model: impl Into<String>) -> Self {
@@ -300,6 +317,22 @@ pub struct TranslationRequestBuilder {
     temperature: Option<f32>,
 }
 
+impl std::fmt::Debug for TranslationRequestBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TranslationRequestBuilder")
+            .field("model", &self.model)
+            .field("filename", &self.filename)
+            .field(
+                "data",
+                &self.data.as_ref().map(|d| format!("<{} bytes>", d.len())),
+            )
+            .field("prompt", &self.prompt)
+            .field("response_format", &self.response_format)
+            .field("temperature", &self.temperature)
+            .finish()
+    }
+}
+
 impl TranslationRequestBuilder {
     /// Set the model ID.
     pub fn model(mut self, model: impl Into<String>) -> Self {
@@ -424,6 +457,7 @@ impl SpeechRequest {
 }
 
 /// Builder for [`SpeechRequest`].
+#[derive(Debug)]
 pub struct SpeechRequestBuilder {
     model: Option<String>,
     input: Option<String>,
@@ -1602,5 +1636,40 @@ mod tests {
         let _ = speak(&client, &request).await;
 
         assert!(logs_contain("foundry::audio::speak"));
+    }
+
+    #[test]
+    fn test_transcription_builder_debug_hides_bytes() {
+        let builder = TranscriptionRequest::builder()
+            .model("whisper-1")
+            .filename("test.wav")
+            .data(vec![0u8; 2048]);
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("TranscriptionRequestBuilder"));
+        assert!(debug.contains("<2048 bytes>"));
+        assert!(!debug.contains("[0, 0, 0"));
+    }
+
+    #[test]
+    fn test_translation_builder_debug_hides_bytes() {
+        let builder = TranslationRequest::builder()
+            .model("whisper-1")
+            .filename("test.wav")
+            .data(vec![0u8; 512]);
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("TranslationRequestBuilder"));
+        assert!(debug.contains("<512 bytes>"));
+        assert!(!debug.contains("[0, 0, 0"));
+    }
+
+    #[test]
+    fn test_speech_builder_implements_debug() {
+        let builder = SpeechRequest::builder()
+            .model("tts-1")
+            .input("Hello")
+            .voice("alloy");
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("SpeechRequestBuilder"));
+        assert!(debug.contains("tts-1"));
     }
 }

@@ -20,7 +20,7 @@
 //! let request = ImageAnalysisRequest::builder()
 //!     .url("https://example.com/image.jpg")
 //!     .features(vec![VisualFeature::Tags, VisualFeature::Caption])
-//!     .build()?;
+//!     .try_build()?;
 //!
 //! let result = vision::analyze(&client, &request).await?;
 //! if let Some(caption) = &result.caption_result {
@@ -94,8 +94,7 @@ impl VisualFeature {
 /// let request = ImageAnalysisRequest::builder()
 ///     .url("https://example.com/image.jpg")
 ///     .features(vec![VisualFeature::Tags, VisualFeature::Caption])
-///     .build()
-///     .expect("valid request");
+///     .build();
 /// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct ImageAnalysisRequest {
@@ -230,7 +229,7 @@ impl ImageAnalysisRequestBuilder {
     /// - `url` is missing or empty
     /// - `features` is missing or empty
     /// - Any smart crop aspect ratio is outside the valid range (0.75..=1.80)
-    pub fn build(self) -> FoundryResult<ImageAnalysisRequest> {
+    pub fn try_build(self) -> FoundryResult<ImageAnalysisRequest> {
         let url = self
             .url
             .filter(|u| !u.is_empty())
@@ -259,6 +258,13 @@ impl ImageAnalysisRequestBuilder {
             smartcrops_aspect_ratios: self.smartcrops_aspect_ratios,
             gender_neutral_caption: self.gender_neutral_caption,
         })
+    }
+
+    /// Build the request. Panics if required fields are missing.
+    ///
+    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    pub fn build(self) -> ImageAnalysisRequest {
+        self.try_build().expect("builder validation failed")
     }
 }
 
@@ -456,7 +462,7 @@ pub struct PeopleResult {
 /// let request = ImageAnalysisRequest::builder()
 ///     .url("https://example.com/image.jpg")
 ///     .features(vec![VisualFeature::Tags, VisualFeature::Caption])
-///     .build()?;
+///     .try_build()?;
 ///
 /// let result = vision::analyze(client, &request).await?;
 /// # Ok(())
@@ -569,7 +575,7 @@ mod tests {
     fn test_image_analysis_request_requires_url() {
         let result = ImageAnalysisRequest::builder()
             .features(vec![VisualFeature::Tags])
-            .build();
+            .try_build();
         let err = result.expect_err("should require url");
         assert!(err.to_string().contains("url"), "error: {err}");
     }
@@ -579,7 +585,7 @@ mod tests {
         let result = ImageAnalysisRequest::builder()
             .url("")
             .features(vec![VisualFeature::Tags])
-            .build();
+            .try_build();
         let err = result.expect_err("should reject empty url");
         assert!(err.to_string().contains("url"), "error: {err}");
     }
@@ -588,7 +594,7 @@ mod tests {
     fn test_image_analysis_request_requires_features() {
         let result = ImageAnalysisRequest::builder()
             .url("https://example.com/img.png")
-            .build();
+            .try_build();
         let err = result.expect_err("should require features");
         assert!(err.to_string().contains("features"), "error: {err}");
     }
@@ -598,7 +604,7 @@ mod tests {
         let result = ImageAnalysisRequest::builder()
             .url("https://example.com/img.png")
             .features(vec![])
-            .build();
+            .try_build();
         let err = result.expect_err("should reject empty features");
         assert!(err.to_string().contains("features"), "error: {err}");
     }
@@ -609,7 +615,7 @@ mod tests {
             .url("https://example.com/img.png")
             .features(vec![VisualFeature::SmartCrops])
             .smartcrops_aspect_ratios(vec![f64::NAN])
-            .build();
+            .try_build();
         let err = result.expect_err("NaN should be rejected");
         assert!(err.to_string().contains("aspect ratio"), "error: {err}",);
     }
@@ -620,7 +626,7 @@ mod tests {
             .url("https://example.com/img.png")
             .features(vec![VisualFeature::SmartCrops])
             .smartcrops_aspect_ratios(vec![f64::INFINITY])
-            .build();
+            .try_build();
         let err = result.expect_err("Infinity should be rejected");
         assert!(err.to_string().contains("aspect ratio"), "error: {err}",);
     }
@@ -631,7 +637,7 @@ mod tests {
             .url("https://example.com/img.png")
             .features(vec![VisualFeature::SmartCrops])
             .smartcrops_aspect_ratios(vec![0.5]) // below 0.75
-            .build();
+            .try_build();
         let err = result.expect_err("should reject invalid ratio");
         assert!(err.to_string().contains("aspect ratio"), "error: {err}");
     }
@@ -641,8 +647,7 @@ mod tests {
         let request = ImageAnalysisRequest::builder()
             .url("https://example.com/image.jpg")
             .features(vec![VisualFeature::Tags])
-            .build()
-            .expect("valid request");
+            .build();
         assert_eq!(request.url(), "https://example.com/image.jpg");
     }
 
@@ -655,8 +660,7 @@ mod tests {
         let request = ImageAnalysisRequest::builder()
             .url("https://example.com/img.png")
             .features(vec![VisualFeature::Tags, VisualFeature::Caption])
-            .build()
-            .expect("valid request");
+            .build();
 
         let json = serde_json::to_value(&request).expect("should serialize");
         assert_eq!(json["url"], "https://example.com/img.png");
@@ -671,8 +675,7 @@ mod tests {
         let request = ImageAnalysisRequest::builder()
             .url("https://example.com/img.png")
             .features(vec![VisualFeature::Tags, VisualFeature::Caption])
-            .build()
-            .expect("valid request");
+            .build();
 
         assert_eq!(request.features_query_param(), "tags,caption");
     }
@@ -684,8 +687,7 @@ mod tests {
             .features(vec![VisualFeature::Tags])
             .language("en")
             .gender_neutral_caption(true)
-            .build()
-            .expect("valid request");
+            .build();
 
         let qs = request.query_string();
         assert!(qs.contains("features=tags"), "qs: {qs}");
@@ -822,8 +824,7 @@ mod tests {
         let request = ImageAnalysisRequest::builder()
             .url("https://example.com/dog.jpg")
             .features(vec![VisualFeature::Caption])
-            .build()
-            .expect("valid request");
+            .build();
 
         let result = analyze(&client, &request).await.expect("should succeed");
         assert_eq!(result.model_version, "2024-02-01");
@@ -855,8 +856,7 @@ mod tests {
         let request = ImageAnalysisRequest::builder()
             .url("https://example.com/invalid.jpg")
             .features(vec![VisualFeature::Tags])
-            .build()
-            .expect("valid request");
+            .build();
 
         let err = analyze(&client, &request).await.expect_err("should fail");
         // FoundryClient maps non-success to FoundryError::Http or FoundryError::Api
@@ -881,8 +881,7 @@ mod tests {
         let request = ImageAnalysisRequest::builder()
             .url("https://example.com/img.jpg")
             .features(vec![VisualFeature::Tags])
-            .build()
-            .expect("valid request");
+            .build();
 
         let err = analyze(&client, &request).await.expect_err("should fail");
         let msg = err.to_string();
@@ -911,8 +910,7 @@ mod tests {
         let request = ImageAnalysisRequest::builder()
             .url("https://example.com/img.jpg")
             .features(vec![VisualFeature::Tags, VisualFeature::Caption])
-            .build()
-            .expect("valid request");
+            .build();
 
         let _ = analyze(&client, &request).await;
 
@@ -938,8 +936,7 @@ mod tests {
         let request = ImageAnalysisRequest::builder()
             .url("https://example.com/img.jpg")
             .features(vec![VisualFeature::Tags])
-            .build()
-            .expect("valid request");
+            .build();
 
         let _ = analyze(&client, &request).await;
         assert!(logs_contain("foundry::vision::analyze"));

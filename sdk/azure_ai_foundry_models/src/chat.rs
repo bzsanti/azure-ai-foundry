@@ -77,6 +77,7 @@ pub struct ChatCompletionRequest {
 }
 
 /// Builder for [`ChatCompletionRequest`].
+#[derive(Debug)]
 pub struct ChatCompletionRequestBuilder {
     model: Option<String>,
     messages: Vec<Message>,
@@ -1951,5 +1952,13 @@ data: [DONE]
             .build();
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["stop"], serde_json::json!(["a", "b"]));
+    }
+
+    #[test]
+    fn test_chat_builder_implements_debug() {
+        let builder = ChatCompletionRequest::builder().model("gpt-4o");
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("ChatCompletionRequestBuilder"));
+        assert!(debug.contains("gpt-4o"));
     }
 }

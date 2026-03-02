@@ -24,7 +24,7 @@
 //! let request = DocumentAnalysisRequest::builder()
 //!     .model_id(PREBUILT_READ)
 //!     .url_source("https://example.com/document.pdf")
-//!     .build()?;
+//!     .try_build()?;
 //!
 //! let operation = document_intelligence::analyze(&client, &request).await?;
 //! let result = document_intelligence::poll_until_complete(
@@ -121,8 +121,7 @@ impl DocumentAnalysisFeature {
 /// let request = DocumentAnalysisRequest::builder()
 ///     .model_id(PREBUILT_READ)
 ///     .url_source("https://example.com/document.pdf")
-///     .build()
-///     .expect("valid request");
+///     .build();
 /// ```
 #[derive(Debug, Clone)]
 pub struct DocumentAnalysisRequest {
@@ -146,13 +145,15 @@ pub struct DocumentAnalysisRequest {
 }
 
 /// The JSON body sent to the Document Intelligence analyze endpoint.
+///
+/// Uses borrowed references to avoid cloning potentially large base64 strings.
 #[derive(Debug, Serialize)]
-struct DocumentAnalysisBody {
+struct DocumentAnalysisBody<'a> {
     #[serde(rename = "urlSource", skip_serializing_if = "Option::is_none")]
-    url_source: Option<String>,
+    url_source: Option<&'a str>,
 
     #[serde(rename = "base64Source", skip_serializing_if = "Option::is_none")]
-    base64_source: Option<String>,
+    base64_source: Option<&'a str>,
 }
 
 impl DocumentAnalysisRequest {
@@ -162,10 +163,10 @@ impl DocumentAnalysisRequest {
     }
 
     /// Returns the JSON body for the API request.
-    fn body(&self) -> DocumentAnalysisBody {
+    fn body(&self) -> DocumentAnalysisBody<'_> {
         DocumentAnalysisBody {
-            url_source: self.url_source.clone(),
-            base64_source: self.base64_source.clone(),
+            url_source: self.url_source.as_deref(),
+            base64_source: self.base64_source.as_deref(),
         }
     }
 
@@ -250,7 +251,7 @@ impl DocumentAnalysisRequestBuilder {
     /// - `model_id` is missing or empty
     /// - Neither `url_source` nor `base64_source` is set
     /// - Both `url_source` and `base64_source` are set
-    pub fn build(self) -> FoundryResult<DocumentAnalysisRequest> {
+    pub fn try_build(self) -> FoundryResult<DocumentAnalysisRequest> {
         let model_id = self
             .model_id
             .filter(|m| !m.is_empty())
@@ -281,6 +282,13 @@ impl DocumentAnalysisRequestBuilder {
             locale: self.locale,
             features: self.features,
         })
+    }
+
+    /// Build the request. Panics if required fields are missing.
+    ///
+    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    pub fn build(self) -> DocumentAnalysisRequest {
+        self.try_build().expect("builder validation failed")
     }
 }
 
@@ -503,7 +511,7 @@ pub struct OperationStatus {
 /// let request = DocumentAnalysisRequest::builder()
 ///     .model_id(PREBUILT_READ)
 ///     .url_source("https://example.com/doc.pdf")
-///     .build()?;
+///     .try_build()?;
 ///
 /// let operation = document_intelligence::analyze(client, &request).await?;
 /// println!("Poll at: {}", operation.operation_location);
@@ -561,7 +569,7 @@ pub async fn analyze(
 /// let request = DocumentAnalysisRequest::builder()
 ///     .model_id(PREBUILT_READ)
 ///     .url_source("https://example.com/doc.pdf")
-///     .build()?;
+///     .try_build()?;
 ///
 /// let operation = document_intelligence::analyze(client, &request).await?;
 /// let result = document_intelligence::get_result(client, &operation.operation_location).await?;
@@ -705,7 +713,7 @@ mod tests {
     fn test_doc_analysis_request_requires_model_id() {
         let result = DocumentAnalysisRequest::builder()
             .url_source("https://example.com/doc.pdf")
-            .build();
+            .try_build();
         let err = result.expect_err("should require model_id");
         assert!(err.to_string().contains("model_id"), "error: {err}");
     }
@@ -715,7 +723,7 @@ mod tests {
         let result = DocumentAnalysisRequest::builder()
             .model_id("")
             .url_source("https://example.com/doc.pdf")
-            .build();
+            .try_build();
         let err = result.expect_err("should reject empty model_id");
         assert!(err.to_string().contains("model_id"), "error: {err}");
     }
@@ -724,7 +732,7 @@ mod tests {
     fn test_doc_analysis_request_requires_source() {
         let result = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
-            .build();
+            .try_build();
         let err = result.expect_err("should require source");
         assert!(err.to_string().contains("source"), "error: {err}");
     }
@@ -735,7 +743,7 @@ mod tests {
             .model_id(PREBUILT_READ)
             .url_source("https://example.com/doc.pdf")
             .base64_source("aGVsbG8=")
-            .build();
+            .try_build();
         let err = result.expect_err("should reject both sources");
         assert!(err.to_string().contains("only one"), "error: {err}");
     }
@@ -745,7 +753,7 @@ mod tests {
         let result = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .url_source("")
-            .build();
+            .try_build();
         let err = result.expect_err("empty url_source should be rejected");
         assert!(
             err.to_string().contains("source"),
@@ -758,7 +766,7 @@ mod tests {
         let result = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .base64_source("")
-            .build();
+            .try_build();
         let err = result.expect_err("empty base64_source should be rejected");
         assert!(
             err.to_string().contains("source"),
@@ -771,8 +779,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .url_source("https://example.com/doc.pdf")
-            .build()
-            .expect("should accept url_source");
+            .build();
         assert_eq!(request.model_id, PREBUILT_READ);
     }
 
@@ -781,8 +788,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .base64_source("aGVsbG8=")
-            .build()
-            .expect("should accept base64_source");
+            .build();
         assert_eq!(request.model_id, PREBUILT_READ);
     }
 
@@ -795,8 +801,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .url_source("https://example.com/doc.pdf")
-            .build()
-            .expect("valid request");
+            .build();
 
         let body = request.body();
         let json = serde_json::to_value(&body).expect("should serialize");
@@ -809,8 +814,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .base64_source("aGVsbG8=")
-            .build()
-            .expect("valid request");
+            .build();
 
         let body = request.body();
         let json = serde_json::to_value(&body).expect("should serialize");
@@ -826,8 +830,7 @@ mod tests {
             .pages("1-3")
             .locale("en-US")
             .features(vec![DocumentAnalysisFeature::OcrHighResolution])
-            .build()
-            .expect("valid request");
+            .build();
 
         let qs = request.query_string();
         assert!(qs.contains("api-version=2024-11-30"), "qs: {qs}");
@@ -1014,8 +1017,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .url_source("https://example.com/doc.pdf")
-            .build()
-            .expect("valid request");
+            .build();
 
         let operation = analyze(&client, &request).await.expect("should succeed");
         assert!(
@@ -1045,8 +1047,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .url_source("https://example.com/doc.pdf")
-            .build()
-            .expect("valid request");
+            .build();
 
         let err = analyze(&client, &request)
             .await
@@ -1075,8 +1076,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .url_source("https://example.com/doc.pdf")
-            .build()
-            .expect("valid request");
+            .build();
 
         let err = analyze(&client, &request)
             .await
@@ -1303,8 +1303,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .url_source("https://example.com/doc.pdf")
-            .build()
-            .expect("valid request");
+            .build();
 
         let err = analyze(&client, &request).await.expect_err("should fail");
         let msg = err.to_string();
@@ -1335,8 +1334,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id("nonexistent")
             .url_source("https://example.com/doc.pdf")
-            .build()
-            .expect("valid request");
+            .build();
 
         let err = analyze(&client, &request).await.expect_err("should fail");
         let msg = err.to_string();
@@ -1375,8 +1373,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .url_source("https://example.com/doc.pdf")
-            .build()
-            .expect("valid request");
+            .build();
 
         let _ = analyze(&client, &request).await;
         assert!(logs_contain("foundry::document_intelligence::analyze"));
@@ -1407,8 +1404,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id(PREBUILT_READ)
             .url_source("https://example.com/doc.pdf")
-            .build()
-            .expect("valid request");
+            .build();
 
         let _ = analyze(&client, &request).await;
 
@@ -1520,8 +1516,7 @@ mod tests {
         let request = DocumentAnalysisRequest::builder()
             .model_id("../evil-model")
             .url_source("https://example.com/doc.pdf")
-            .build()
-            .unwrap();
+            .build();
         let result = analyze(&client, &request).await;
         assert!(result.is_err());
         let err = result.unwrap_err();

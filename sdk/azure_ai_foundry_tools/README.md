@@ -40,7 +40,7 @@ let client = FoundryClient::builder()
 let request = ImageAnalysisRequest::builder()
     .url("https://example.com/image.jpg")
     .features(vec![VisualFeature::Tags, VisualFeature::Caption])
-    .build()?;
+    .try_build()?;
 
 let result = vision::analyze(&client, &request).await?;
 if let Some(caption) = &result.caption_result {
@@ -68,7 +68,7 @@ let client = FoundryClient::builder()
 let request = DocumentAnalysisRequest::builder()
     .model_id(PREBUILT_READ)
     .url_source("https://example.com/document.pdf")
-    .build()?;
+    .try_build()?;
 
 let operation = document_intelligence::analyze(&client, &request).await?;
 let result = document_intelligence::poll_until_complete(

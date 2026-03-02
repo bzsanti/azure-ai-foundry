@@ -206,6 +206,7 @@ impl ImageGenerationRequest {
 }
 
 /// Builder for [`ImageGenerationRequest`].
+#[derive(Debug)]
 pub struct ImageGenerationRequestBuilder {
     model: Option<String>,
     prompt: Option<String>,
@@ -360,6 +361,29 @@ pub struct ImageEditRequestBuilder {
     size: Option<ImageSize>,
     quality: Option<ImageQuality>,
     response_format: Option<ImageResponseFormat>,
+}
+
+impl std::fmt::Debug for ImageEditRequestBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImageEditRequestBuilder")
+            .field("model", &self.model)
+            .field(
+                "image",
+                &self.image.as_ref().map(|d| format!("<{} bytes>", d.len())),
+            )
+            .field("image_filename", &self.image_filename)
+            .field("prompt", &self.prompt)
+            .field(
+                "mask",
+                &self.mask.as_ref().map(|d| format!("<{} bytes>", d.len())),
+            )
+            .field("mask_filename", &self.mask_filename)
+            .field("n", &self.n)
+            .field("size", &self.size)
+            .field("quality", &self.quality)
+            .field("response_format", &self.response_format)
+            .finish()
+    }
 }
 
 impl ImageEditRequestBuilder {
@@ -1203,5 +1227,25 @@ mod tests {
         let _ = edit(&client, &request).await;
 
         assert!(logs_contain("foundry::images::edit"));
+    }
+
+    #[test]
+    fn test_image_generation_builder_implements_debug() {
+        let builder = ImageGenerationRequest::builder().model("dall-e-3");
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("ImageGenerationRequestBuilder"));
+        assert!(debug.contains("dall-e-3"));
+    }
+
+    #[test]
+    fn test_image_edit_builder_debug_hides_bytes() {
+        let builder = ImageEditRequest::builder()
+            .model("dall-e-2")
+            .image(vec![0u8; 1024], "test.png")
+            .prompt("test");
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("ImageEditRequestBuilder"));
+        assert!(debug.contains("<1024 bytes>"));
+        assert!(!debug.contains("[0, 0, 0"));
     }
 }

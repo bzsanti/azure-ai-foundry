@@ -172,6 +172,7 @@ pub async fn embed(
 }
 
 /// Builder for [`EmbeddingRequest`].
+#[derive(Debug)]
 pub struct EmbeddingRequestBuilder {
     model: Option<String>,
     input: Option<EmbeddingInput>,
@@ -865,5 +866,13 @@ mod tests {
         let _ = embed(&client, &request).await;
 
         assert!(logs_contain("foundry::embeddings::embed"));
+    }
+
+    #[test]
+    fn test_embedding_builder_implements_debug() {
+        let builder = EmbeddingRequest::builder().model("text-embedding-ada-002");
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("EmbeddingRequestBuilder"));
+        assert!(debug.contains("text-embedding-ada-002"));
     }
 }

@@ -178,16 +178,25 @@ pub async fn upload(
     let data: bytes::Bytes = data.into();
 
     if filename.trim().is_empty() {
-        return Err(FoundryError::Builder("filename cannot be empty".into()));
+        return Err(FoundryError::validation_field(
+            "filename",
+            "filename cannot be empty",
+        ));
     }
     if data.is_empty() {
-        return Err(FoundryError::Builder("file data cannot be empty".into()));
+        return Err(FoundryError::validation_field(
+            "data",
+            "file data cannot be empty",
+        ));
     }
     if data.len() > MAX_FILE_SIZE_BYTES {
-        return Err(FoundryError::Builder(format!(
-            "file data exceeds the 512 MB limit ({} bytes)",
-            data.len()
-        )));
+        return Err(FoundryError::validation_field(
+            "data",
+            format!(
+                "file data exceeds the 512 MB limit ({} bytes)",
+                data.len()
+            ),
+        ));
     }
 
     tracing::debug!(size_bytes = data.len(), "uploading file");

@@ -44,8 +44,7 @@ async fn test_agent_lifecycle() {
         .model(&model)
         .name("Integration Test Agent")
         .instructions("You are a helpful test assistant.")
-        .build()
-        .expect("valid request");
+        .build();
 
     let created_agent = agent::create(&client, &request)
         .await
@@ -101,8 +100,7 @@ async fn test_message_lifecycle() {
     // Create a message
     let msg_request = MessageCreateRequest::builder()
         .content("Hello, this is a test message.")
-        .build()
-        .expect("valid request");
+        .build();
 
     let created_msg = message::create(&client, &created_thread.id, &msg_request)
         .await
@@ -138,8 +136,7 @@ async fn test_run_lifecycle() {
         .model(&model)
         .name("Run Test Agent")
         .instructions("You are a helpful assistant. Respond briefly.")
-        .build()
-        .expect("valid request");
+        .build();
 
     let created_agent = agent::create(&client, &agent_request)
         .await
@@ -151,8 +148,7 @@ async fn test_run_lifecycle() {
     // Add a message
     let msg_request = MessageCreateRequest::builder()
         .content("What is 2+2? Answer with just the number.")
-        .build()
-        .expect("valid request");
+        .build();
 
     message::create(&client, &created_thread.id, &msg_request)
         .await
@@ -161,8 +157,7 @@ async fn test_run_lifecycle() {
     // Create and poll run
     let run_request = RunCreateRequest::builder()
         .assistant_id(&created_agent.id)
-        .build()
-        .expect("valid request");
+        .build();
 
     let created_run = run::create(&client, &created_thread.id, &run_request)
         .await
@@ -211,8 +206,7 @@ async fn test_create_thread_and_run() {
         .model(&model)
         .name("Thread+Run Test Agent")
         .instructions("You are helpful. Be brief.")
-        .build()
-        .expect("valid request");
+        .build();
 
     let created_agent = agent::create(&client, &agent_request)
         .await
@@ -222,8 +216,7 @@ async fn test_create_thread_and_run() {
     let request = CreateThreadAndRunRequest::builder()
         .assistant_id(&created_agent.id)
         .message("Say hello in one word.")
-        .build()
-        .expect("valid request");
+        .build();
 
     let created_run = run::create_thread_and_run(&client, &request)
         .await

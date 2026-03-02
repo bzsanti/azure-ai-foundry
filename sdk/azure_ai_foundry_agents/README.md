@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .model("gpt-4o")
         .name("My Assistant")
         .instructions("You are a helpful assistant.")
-        .build()?;
+        .try_build()?;
 
     let agent = agent::create(&client, &request).await?;
     println!("Created agent: {}", agent.id);
@@ -70,13 +70,13 @@ let thread = thread::create(client, None).await?;
 // Add a message
 let msg_request = MessageCreateRequest::builder()
     .content("What is the weather in Paris?")
-    .build()?;
+    .try_build()?;
 message::create(client, &thread.id, &msg_request).await?;
 
 // Run the agent
 let run_request = RunCreateRequest::builder()
     .assistant_id(agent_id)
-    .build()?;
+    .try_build()?;
 let created_run = run::create(client, &thread.id, &run_request).await?;
 
 // Poll until complete (None = unlimited attempts)

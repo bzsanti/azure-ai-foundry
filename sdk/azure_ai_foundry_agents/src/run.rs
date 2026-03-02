@@ -24,20 +24,20 @@
 //! let agent_req = AgentCreateRequest::builder()
 //!     .model("gpt-4o")
 //!     .instructions("You are helpful.")
-//!     .build()?;
+//!     .try_build()?;
 //! let agent = agent::create(&client, &agent_req).await?;
 //!
 //! // Create a thread with a message
 //! let thread = thread::create(&client, None).await?;
 //! let msg_req = MessageCreateRequest::builder()
 //!     .content("What is 2+2?")
-//!     .build()?;
+//!     .try_build()?;
 //! message::create(&client, &thread.id, &msg_req).await?;
 //!
 //! // Run the agent on the thread
 //! let run_req = RunCreateRequest::builder()
 //!     .assistant_id(&agent.id)
-//!     .build()?;
+//!     .try_build()?;
 //! let mut run_result = run::create(&client, &thread.id, &run_req).await?;
 //!
 //! // Poll until complete
@@ -175,7 +175,7 @@ impl RunCreateRequestBuilder {
     /// # Errors
     ///
     /// Returns an error if `assistant_id` is not set.
-    pub fn build(self) -> FoundryResult<RunCreateRequest> {
+    pub fn try_build(self) -> FoundryResult<RunCreateRequest> {
         let assistant_id = self
             .assistant_id
             .ok_or_else(|| FoundryError::Builder("assistant_id is required".into()))?;
@@ -212,6 +212,13 @@ impl RunCreateRequestBuilder {
             max_prompt_tokens: self.max_prompt_tokens,
             max_completion_tokens: self.max_completion_tokens,
         })
+    }
+
+    /// Build the request. Panics if required fields are missing.
+    ///
+    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    pub fn build(self) -> RunCreateRequest {
+        self.try_build().expect("builder validation failed")
     }
 }
 
@@ -326,8 +333,8 @@ impl CreateThreadAndRunRequestBuilder {
         self
     }
 
-    /// Build the request.
-    pub fn build(self) -> FoundryResult<CreateThreadAndRunRequest> {
+    /// Build the request, returning an error if required fields are missing.
+    pub fn try_build(self) -> FoundryResult<CreateThreadAndRunRequest> {
         let assistant_id = self
             .assistant_id
             .ok_or_else(|| FoundryError::Builder("assistant_id is required".into()))?;
@@ -351,6 +358,13 @@ impl CreateThreadAndRunRequestBuilder {
             instructions: self.instructions,
             metadata: self.run_metadata,
         })
+    }
+
+    /// Build the request. Panics if required fields are missing.
+    ///
+    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    pub fn build(self) -> CreateThreadAndRunRequest {
+        self.try_build().expect("builder validation failed")
     }
 }
 
@@ -533,7 +547,7 @@ pub struct RunUsage {
 /// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
 /// let request = RunCreateRequest::builder()
 ///     .assistant_id("asst_abc123")
-///     .build()?;
+///     .try_build()?;
 ///
 /// let run = run::create(client, "thread_xyz", &request).await?;
 /// println!("Run started: {} (status: {:?})", run.id, run.status);
@@ -617,7 +631,7 @@ pub async fn get(client: &FoundryClient, thread_id: &str, run_id: &str) -> Found
 /// let request = CreateThreadAndRunRequest::builder()
 ///     .assistant_id("asst_abc123")
 ///     .message("What is the weather like?")
-///     .build()?;
+///     .try_build()?;
 ///
 /// let run = run::create_thread_and_run(client, &request).await?;
 /// println!("Thread: {}, Run: {}", run.thread_id, run.id);
@@ -747,7 +761,7 @@ pub async fn poll_until_complete(
 /// let request = CreateThreadAndRunRequest::builder()
 ///     .assistant_id("asst_abc123")
 ///     .message("Hello!")
-///     .build()?;
+///     .try_build()?;
 ///
 /// let (thread, run) = run::create_and_poll(
 ///     client,
@@ -838,12 +852,15 @@ pub async fn submit_tool_outputs(
     tool_outputs: &[ToolOutput],
 ) -> FoundryResult<Run> {
     if tool_outputs.is_empty() {
-        return Err(FoundryError::Builder("tool_outputs cannot be empty".into()));
+        return Err(FoundryError::validation("tool_outputs cannot be empty"));
     }
 
     for output in tool_outputs {
         if output.tool_call_id.trim().is_empty() {
-            return Err(FoundryError::Builder("tool_call_id cannot be empty".into()));
+            return Err(FoundryError::validation_field(
+                "tool_call_id",
+                "tool_call_id cannot be empty",
+            ));
         }
     }
 
@@ -992,8 +1009,7 @@ mod tests {
         let request = CreateThreadAndRunRequest::builder()
             .assistant_id("asst_abc")
             .message("Hello!")
-            .build()
-            .expect("valid request");
+            .build();
 
         let (thread, run) = create_and_poll(&client, &request, Duration::from_millis(10), None)
             .await
@@ -1033,8 +1049,7 @@ mod tests {
     fn test_run_request_serialization() {
         let request = RunCreateRequest::builder()
             .assistant_id("asst_abc")
-            .build()
-            .expect("valid request");
+            .build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -1043,7 +1058,7 @@ mod tests {
 
     #[test]
     fn test_run_builder_requires_assistant_id() {
-        let result = RunCreateRequest::builder().build();
+        let result = RunCreateRequest::builder().try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1055,7 +1070,7 @@ mod tests {
         let result = RunCreateRequest::builder()
             .assistant_id("asst_abc")
             .temperature(3.0)
-            .build();
+            .try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1116,8 +1131,7 @@ mod tests {
 
         let request = RunCreateRequest::builder()
             .assistant_id("asst_xyz")
-            .build()
-            .expect("valid request");
+            .build();
 
         let run = create(&client, "thread_abc", &request)
             .await
@@ -1165,8 +1179,7 @@ mod tests {
         let request = CreateThreadAndRunRequest::builder()
             .assistant_id("asst_abc")
             .message("Hello!")
-            .build()
-            .expect("valid request");
+            .build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -1200,8 +1213,7 @@ mod tests {
         let request = CreateThreadAndRunRequest::builder()
             .assistant_id("asst_abc")
             .message("Hi there!")
-            .build()
-            .expect("valid request");
+            .build();
 
         let run = create_thread_and_run(&client, &request)
             .await

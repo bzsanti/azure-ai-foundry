@@ -200,6 +200,7 @@ impl CreateResponseRequest {
 }
 
 /// Builder for [`CreateResponseRequest`].
+#[derive(Debug)]
 pub struct CreateResponseRequestBuilder {
     model: Option<String>,
     input: Option<ResponseInput>,
@@ -1322,5 +1323,13 @@ mod tests {
         let json = serde_json::json!({"role": "assistant", "content": "Hi"});
         let msg: ResponseMessage = serde_json::from_value(json).unwrap();
         assert_eq!(msg.role, crate::chat::Role::Assistant);
+    }
+
+    #[test]
+    fn test_response_builder_implements_debug() {
+        let builder = CreateResponseRequest::builder().model("gpt-4o");
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("CreateResponseRequestBuilder"));
+        assert!(debug.contains("gpt-4o"));
     }
 }
