@@ -17,8 +17,8 @@ Vision and Document Intelligence clients for the Azure AI Foundry Rust SDK.
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.5"
-azure_ai_foundry_tools = "0.5"
+azure_ai_foundry_core = "0.7"
+azure_ai_foundry_tools = "0.7"
 tokio = { version = "1", features = ["full"] }
 ```
 
