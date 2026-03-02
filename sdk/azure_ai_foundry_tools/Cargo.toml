@@ -11,6 +11,9 @@ categories.workspace = true
 readme = "README.md"
 documentation = "https://docs.rs/azure_ai_foundry_tools"
 
+[lints]
+workspace = true
+
 [dependencies]
 azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.6.0" }
 serde.workspace = true

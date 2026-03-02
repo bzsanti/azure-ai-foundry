@@ -11,6 +11,9 @@ categories.workspace = true
 readme = "README.md"
 documentation = "https://docs.rs/azure_ai_foundry_core"
 
+[lints]
+workspace = true
+
 [dependencies]
 azure_core.workspace = true
 azure_identity.workspace = true

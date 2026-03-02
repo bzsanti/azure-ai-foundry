@@ -63,6 +63,13 @@ pub enum FoundryError {
     /// A required builder field is missing.
     #[error("Builder error: {0}")]
     Builder(String),
+
+    /// A runtime validation error (invalid input, constraint violation).
+    #[error("Validation error{}: {message}", field.as_ref().map(|f| format!(" ({f})")).unwrap_or_default())]
+    Validation {
+        field: Option<String>,
+        message: String,
+    },
 }
 
 impl From<azure_core::Error> for FoundryError {
@@ -153,6 +160,22 @@ impl FoundryError {
         Self::Stream {
             message: message.into(),
             source: Some(Box::new(source)),
+        }
+    }
+
+    /// Creates a validation error without a field name.
+    pub fn validation(message: impl Into<String>) -> Self {
+        Self::Validation {
+            field: None,
+            message: message.into(),
+        }
+    }
+
+    /// Creates a validation error for a specific field.
+    pub fn validation_field(field: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Validation {
+            field: Some(field.into()),
+            message: message.into(),
         }
     }
 }
@@ -374,6 +397,56 @@ mod tests {
         // Verify source chain is preserved
         let source = foundry_err.source().expect("should have source");
         assert!(source.to_string().contains("key must be a string"));
+    }
+
+    #[test]
+    fn validation_error_display_with_field() {
+        let err = FoundryError::validation_field("model", "must not be empty");
+        assert_eq!(
+            err.to_string(),
+            "Validation error (model): must not be empty"
+        );
+    }
+
+    #[test]
+    fn validation_error_display_without_field() {
+        let err = FoundryError::validation("at least one tool output is required");
+        assert_eq!(
+            err.to_string(),
+            "Validation error: at least one tool output is required"
+        );
+    }
+
+    #[test]
+    fn validation_error_is_distinct_from_builder() {
+        let validation = FoundryError::validation("bad input");
+        let builder = FoundryError::Builder("bad input".into());
+
+        // They should produce different display messages
+        assert_ne!(validation.to_string(), builder.to_string());
+        assert!(validation.to_string().starts_with("Validation error"));
+        assert!(builder.to_string().starts_with("Builder error"));
+    }
+
+    #[test]
+    fn validation_error_matches_variant() {
+        let err = FoundryError::validation_field("id", "cannot be empty");
+        assert!(matches!(
+            err,
+            FoundryError::Validation {
+                field: Some(_),
+                message: _
+            }
+        ));
+
+        let err = FoundryError::validation("invalid input");
+        assert!(matches!(
+            err,
+            FoundryError::Validation {
+                field: None,
+                message: _
+            }
+        ));
     }
 
     /// Backward compatibility test: verify error message formats are unchanged
