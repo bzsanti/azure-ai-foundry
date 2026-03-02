@@ -172,9 +172,11 @@ pub struct FileDeletionResponse {
 pub async fn upload(
     client: &FoundryClient,
     filename: &str,
-    data: Vec<u8>,
+    data: impl Into<bytes::Bytes>,
     purpose: FilePurpose,
 ) -> FoundryResult<FileObject> {
+    let data: bytes::Bytes = data.into();
+
     if filename.trim().is_empty() {
         return Err(FoundryError::Builder("filename cannot be empty".into()));
     }
@@ -193,12 +195,11 @@ pub async fn upload(
     let path = format!("/files?{}", API_VERSION);
     let purpose_str = purpose.as_str().to_string();
     let filename_owned = filename.to_string();
-    let data = std::sync::Arc::new(data);
 
     let response = client
         .post_multipart(&path, move || {
-            let file_part =
-                reqwest::multipart::Part::bytes((*data).clone()).file_name(filename_owned.clone());
+            let file_part = reqwest::multipart::Part::bytes(data.to_vec())
+                .file_name(filename_owned.clone());
             reqwest::multipart::Form::new()
                 .part("file", file_part)
                 .text("purpose", purpose_str.clone())
@@ -349,6 +350,16 @@ mod tests {
     use crate::test_utils::{setup_mock_client, TEST_TIMESTAMP};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // --- R6: upload() accepts Into<bytes::Bytes> ---
+
+    #[test]
+    fn test_upload_accepts_bytes_type() {
+        // Verify that Into<bytes::Bytes> is satisfied by both Vec<u8> and Bytes
+        fn assert_into_bytes<T: Into<bytes::Bytes>>(_: T) {}
+        assert_into_bytes(vec![1u8, 2, 3]);
+        assert_into_bytes(bytes::Bytes::from_static(b"hello"));
+    }
 
     // --- Quality: FilePurpose::as_str() ---
 

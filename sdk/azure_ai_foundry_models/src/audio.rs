@@ -114,7 +114,7 @@ pub enum SpeechFormat {
 // ---------------------------------------------------------------------------
 
 /// A request to transcribe audio to text.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TranscriptionRequest {
     /// The model to use for transcription.
     pub model: String,
@@ -260,7 +260,7 @@ impl TranscriptionRequestBuilder {
 ///
 /// Translation always outputs English. For same-language transcription,
 /// use [`TranscriptionRequest`] instead.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TranslationRequest {
     /// The model to use for translation.
     pub model: String,
@@ -1449,17 +1449,16 @@ mod tests {
         assert_eq!(r.text, "Hello");
     }
 
-    // --- Arc-free data clone ---
+    // --- Data field access ---
 
     #[test]
-    fn test_transcription_request_data_is_cloneable_without_arc() {
+    fn test_transcription_request_data_field_accessible() {
         let req = TranscriptionRequest::builder()
             .model("whisper-1")
             .filename("a.wav")
             .data(vec![1u8, 2, 3])
             .build();
-        let cloned: Vec<u8> = req.data.clone();
-        assert_eq!(cloned, vec![1u8, 2, 3]);
+        assert_eq!(req.data, vec![1u8, 2, 3]);
     }
 
     // --- Optional params end-to-end tests ---

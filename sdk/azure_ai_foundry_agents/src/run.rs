@@ -645,6 +645,7 @@ pub async fn create_thread_and_run(
 /// * `thread_id` - The thread ID.
 /// * `run_id` - The run ID.
 /// * `poll_interval` - How often to check the run status.
+/// * `max_attempts` - Maximum number of poll attempts, or `None` for unlimited.
 ///
 /// # Example
 ///
@@ -658,6 +659,7 @@ pub async fn create_thread_and_run(
 ///     "thread_xyz",
 ///     "run_abc",
 ///     Duration::from_secs(1),
+///     Some(60),
 /// ).await?;
 ///
 /// println!("Run finished with status: {:?}", final_run.status);
@@ -674,7 +676,9 @@ pub async fn poll_until_complete(
     thread_id: &str,
     run_id: &str,
     poll_interval: std::time::Duration,
+    max_attempts: Option<u32>,
 ) -> FoundryResult<Run> {
+    let mut attempts: u32 = 0;
     loop {
         let run = get(client, thread_id, run_id).await?;
 
@@ -692,7 +696,19 @@ pub async fn poll_until_complete(
                 return Ok(run);
             }
             _ => {
-                tracing::trace!(status = ?run.status, "run still in progress");
+                attempts += 1;
+                if let Some(max) = max_attempts {
+                    if attempts >= max {
+                        return Err(FoundryError::Api {
+                            code: "PollTimeout".into(),
+                            message: format!(
+                                "run did not complete after {} poll attempts",
+                                max
+                            ),
+                        });
+                    }
+                }
+                tracing::trace!(status = ?run.status, attempt = attempts, "run still in progress");
                 tokio::time::sleep(poll_interval).await;
             }
         }
@@ -716,7 +732,12 @@ pub async fn poll_until_complete(
 ///     .message("Hello!")
 ///     .build()?;
 ///
-/// let (thread, run) = run::create_and_poll(client, &request, Duration::from_secs(1)).await?;
+/// let (thread, run) = run::create_and_poll(
+///     client,
+///     &request,
+///     Duration::from_secs(1),
+///     Some(60),
+/// ).await?;
 /// println!("Final status: {:?}", run.status);
 /// # Ok(())
 /// # }
@@ -734,6 +755,7 @@ pub async fn create_and_poll(
     client: &FoundryClient,
     request: &CreateThreadAndRunRequest,
     poll_interval: std::time::Duration,
+    max_attempts: Option<u32>,
 ) -> FoundryResult<(Thread, Run)> {
     tracing::debug!("creating thread, run, and polling until complete");
 
@@ -744,7 +766,9 @@ pub async fn create_and_poll(
     let thread = crate::thread::get(client, &thread_id).await?;
 
     // Poll until complete
-    let final_run = poll_until_complete(client, &thread_id, &initial_run.id, poll_interval).await?;
+    let final_run =
+        poll_until_complete(client, &thread_id, &initial_run.id, poll_interval, max_attempts)
+            .await?;
 
     Ok((thread, final_run))
 }
@@ -846,6 +870,7 @@ pub async fn submit_tool_outputs(
 ///     "run_abc",
 ///     &outputs,
 ///     Duration::from_secs(1),
+///     Some(60),
 /// ).await?;
 /// println!("Final status: {:?}", run.status);
 /// # Ok(())
@@ -867,6 +892,7 @@ pub async fn submit_tool_outputs_and_poll(
     run_id: &str,
     tool_outputs: &[ToolOutput],
     poll_interval: Duration,
+    max_attempts: Option<u32>,
 ) -> FoundryResult<Run> {
     tracing::debug!("submitting tool outputs and polling until complete");
 
@@ -882,7 +908,7 @@ pub async fn submit_tool_outputs_and_poll(
         _ => {}
     }
 
-    poll_until_complete(client, thread_id, &run.id, poll_interval).await
+    poll_until_complete(client, thread_id, &run.id, poll_interval, max_attempts).await
 }
 
 #[cfg(test)]
@@ -952,7 +978,7 @@ mod tests {
             .build()
             .expect("valid request");
 
-        let (thread, run) = create_and_poll(&client, &request, Duration::from_millis(10))
+        let (thread, run) = create_and_poll(&client, &request, Duration::from_millis(10), None)
             .await
             .expect("should succeed");
 
@@ -1383,9 +1409,96 @@ mod tests {
             "run_poll",
             &outputs,
             Duration::from_millis(10),
+            None,
         )
         .await
         .expect("should succeed");
+
+        assert_eq!(run.status, RunStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_poll_until_complete_respects_max_attempts() {
+        let server = MockServer::start().await;
+
+        // Always return in_progress
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_lim/runs/run_lim"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "run_lim",
+                "object": "thread.run",
+                "thread_id": "thread_lim",
+                "assistant_id": "asst_1",
+                "status": "in_progress",
+                "created_at": TEST_TIMESTAMP
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let result = poll_until_complete(
+            &client,
+            "thread_lim",
+            "run_lim",
+            Duration::from_millis(1),
+            Some(3),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("PollTimeout"),
+            "Expected PollTimeout, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_poll_until_complete_none_unlimited_completes() {
+        let server = MockServer::start().await;
+
+        // Return in_progress twice, then completed
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_u/runs/run_u"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "run_u",
+                "object": "thread.run",
+                "thread_id": "thread_u",
+                "assistant_id": "asst_1",
+                "status": "in_progress",
+                "created_at": TEST_TIMESTAMP
+            })))
+            .up_to_n_times(2)
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_u/runs/run_u"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "run_u",
+                "object": "thread.run",
+                "thread_id": "thread_u",
+                "assistant_id": "asst_1",
+                "status": "completed",
+                "created_at": TEST_TIMESTAMP
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let run = poll_until_complete(
+            &client,
+            "thread_u",
+            "run_u",
+            Duration::from_millis(1),
+            None,
+        )
+        .await
+        .expect("should complete");
 
         assert_eq!(run.status, RunStatus::Completed);
     }

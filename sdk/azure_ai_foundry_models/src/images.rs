@@ -306,7 +306,7 @@ impl ImageGenerationRequestBuilder {
 // ---------------------------------------------------------------------------
 
 /// A request to edit an existing image using a text prompt.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ImageEditRequest {
     /// The model to use for editing.
     pub model: String,

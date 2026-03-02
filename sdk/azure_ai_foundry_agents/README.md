@@ -79,12 +79,13 @@ let run_request = RunCreateRequest::builder()
     .build()?;
 let created_run = run::create(client, &thread.id, &run_request).await?;
 
-// Poll until complete
+// Poll until complete (None = unlimited attempts)
 let completed_run = run::poll_until_complete(
     client,
     &thread.id,
     &created_run.id,
     Duration::from_secs(1),
+    None,
 ).await?;
 
 // Get the response
@@ -152,7 +153,7 @@ let outputs = vec![ToolOutput {
 }];
 
 let run = run::submit_tool_outputs_and_poll(
-    client, "thread_xyz", "run_abc", &outputs, Duration::from_secs(1),
+    client, "thread_xyz", "run_abc", &outputs, Duration::from_secs(1), Some(60),
 ).await?;
 # Ok(())
 # }
