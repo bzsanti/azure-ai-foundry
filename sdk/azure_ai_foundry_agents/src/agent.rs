@@ -698,9 +698,7 @@ mod tests {
 
     #[test]
     fn test_agent_request_serialization_minimal() {
-        let request = AgentCreateRequest::builder()
-            .model("gpt-4o")
-            .build();
+        let request = AgentCreateRequest::builder().model("gpt-4o").build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -1047,9 +1045,7 @@ mod tests {
 
     #[test]
     fn test_agent_update_request_serialization() {
-        let request = AgentUpdateRequest::builder()
-            .name("Updated Agent")
-            .build();
+        let request = AgentUpdateRequest::builder().name("Updated Agent").build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -1105,9 +1101,7 @@ mod tests {
 
         let client = setup_mock_client(&server).await;
 
-        let request = AgentUpdateRequest::builder()
-            .name("Updated Agent")
-            .build();
+        let request = AgentUpdateRequest::builder().name("Updated Agent").build();
 
         let agent = update(&client, "asst_abc123", &request)
             .await
@@ -1204,7 +1198,10 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
             "Expected Validation error, got: {:?}",
             err
         );
@@ -1227,9 +1224,7 @@ mod tests {
 
         let client = setup_mock_client(&server).await;
 
-        let request = AgentUpdateRequest::builder()
-            .name("New Name")
-            .build();
+        let request = AgentUpdateRequest::builder().name("New Name").build();
 
         let result = update(&client, "asst_missing", &request).await;
 

@@ -522,7 +522,10 @@ pub struct RunError {
 }
 
 /// Deprecated: Use [`azure_ai_foundry_core::models::Usage`] instead.
-#[deprecated(since = "0.7.0", note = "Use azure_ai_foundry_core::models::Usage instead")]
+#[deprecated(
+    since = "0.7.0",
+    note = "Use azure_ai_foundry_core::models::Usage instead"
+)]
 pub type RunUsage = Usage;
 
 // ---------------------------------------------------------------------------
@@ -724,10 +727,7 @@ pub async fn poll_until_complete(
                     if attempts >= max {
                         return Err(FoundryError::Api {
                             code: "PollTimeout".into(),
-                            message: format!(
-                                "run did not complete after {} poll attempts",
-                                max
-                            ),
+                            message: format!("run did not complete after {} poll attempts", max),
                         });
                     }
                 }
@@ -789,9 +789,14 @@ pub async fn create_and_poll(
     let thread = crate::thread::get(client, &thread_id).await?;
 
     // Poll until complete
-    let final_run =
-        poll_until_complete(client, &thread_id, &initial_run.id, poll_interval, max_attempts)
-            .await?;
+    let final_run = poll_until_complete(
+        client,
+        &thread_id,
+        &initial_run.id,
+        poll_interval,
+        max_attempts,
+    )
+    .await?;
 
     Ok((thread, final_run))
 }
@@ -1039,9 +1044,7 @@ mod tests {
 
     #[test]
     fn test_run_request_serialization() {
-        let request = RunCreateRequest::builder()
-            .assistant_id("asst_abc")
-            .build();
+        let request = RunCreateRequest::builder().assistant_id("asst_abc").build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -1152,9 +1155,7 @@ mod tests {
 
         let client = setup_mock_client(&server).await;
 
-        let request = RunCreateRequest::builder()
-            .assistant_id("asst_xyz")
-            .build();
+        let request = RunCreateRequest::builder().assistant_id("asst_xyz").build();
 
         let run = create(&client, "thread_abc", &request)
             .await
@@ -1542,15 +1543,9 @@ mod tests {
 
         let client = setup_mock_client(&server).await;
 
-        let run = poll_until_complete(
-            &client,
-            "thread_u",
-            "run_u",
-            Duration::from_millis(1),
-            None,
-        )
-        .await
-        .expect("should complete");
+        let run = poll_until_complete(&client, "thread_u", "run_u", Duration::from_millis(1), None)
+            .await
+            .expect("should complete");
 
         assert_eq!(run.status, RunStatus::Completed);
     }
@@ -1563,7 +1558,10 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
             "Expected Validation error, got: {:?}",
             err
         );

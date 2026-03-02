@@ -192,10 +192,7 @@ pub async fn upload(
     if data.len() > MAX_FILE_SIZE_BYTES {
         return Err(FoundryError::validation_field(
             "data",
-            format!(
-                "file data exceeds the 512 MB limit ({} bytes)",
-                data.len()
-            ),
+            format!("file data exceeds the 512 MB limit ({} bytes)", data.len()),
         ));
     }
 
@@ -207,8 +204,8 @@ pub async fn upload(
 
     let response = client
         .post_multipart(&path, move || {
-            let file_part = reqwest::multipart::Part::bytes(data.to_vec())
-                .file_name(filename_owned.clone());
+            let file_part =
+                reqwest::multipart::Part::bytes(data.to_vec()).file_name(filename_owned.clone());
             reqwest::multipart::Form::new()
                 .part("file", file_part)
                 .text("purpose", purpose_str.clone())
@@ -725,7 +722,10 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
             "Expected Validation error, got: {:?}",
             err
         );

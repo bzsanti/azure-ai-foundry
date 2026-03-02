@@ -1521,7 +1521,10 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, azure_ai_foundry_core::error::FoundryError::Validation { .. }),
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
             "Expected Validation error, got: {:?}",
             err
         );
