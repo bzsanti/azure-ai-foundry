@@ -168,7 +168,33 @@ Published to crates.io:
 - Responses API (create, get, delete)
 - 13 quality fixes via TDD cycles
 
+**v0.7.0 Status:** IN PROGRESS (branch `feature/0.7.0`)
+- Quality refactor: 7/7 original milestones complete (M1-M7)
+- Version bumped to 0.7.0 across all crates
+- Quality review round 2: 12 new findings identified, TDD plan ready in `.claude/plan.md`
+- Pending: Execute 6 new milestones (UTF-8 fix, panics doc, type fixes, allocation reduction, validation, test dedup)
+- Pending: Update CHANGELOG.md, create PR, merge to main
+
+**v0.7.0 Highlights (completed so far):**
+- `FoundryError::Validation` variant for runtime validation errors
+- Workspace-level Clippy lints (unsafe_code=deny, clippy::all=warn)
+- Removed panic paths in auth.rs and client.rs
+- Optimized `sanitize_error_message` (O(n) instead of O(n²))
+- URL path injection validation for all resource IDs
+- Extracted `execute_with_retry` to eliminate retry loop duplication (~350 lines removed)
+- `poll_until_complete` now accepts `max_attempts: Option<u32>`
+- Removed `Clone` from audio/image request types with Vec<u8> data
+- `file::upload` uses `impl Into<bytes::Bytes>` for zero-copy
+- `stop()` builder methods accept `impl IntoIterator`
+- `Display` impls for `RunStatus`, `VectorStoreStatus`
+- `ResponseMessage::role` typed as `Role` enum
+- `Debug` on all model builders (manual impl for byte-holding builders)
+- Borrowed `DocumentAnalysisBody<'a>` to avoid clones
+- Standardized `build()` / `try_build()` across all builders
+- `FoundryError::Validation` for runtime validation (distinct from `Builder`)
+- Unified `RunUsage` with `azure_ai_foundry_core::models::Usage`
+
 **Test Summary:**
-- 581 tests passing (119 core + 175 models + 120 agents + 60 tools + 107 doc-tests)
+- 624 tests passing (133 core + 190 models + 133 agents + 61 tools + 107 doc-tests)
 - All clippy checks passing (0 warnings)
 - All formatting checks passing
