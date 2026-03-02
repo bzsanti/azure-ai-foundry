@@ -57,6 +57,17 @@ pub enum VectorStoreStatus {
     Completed,
 }
 
+impl std::fmt::Display for VectorStoreStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Expired => "expired",
+        };
+        f.write_str(s)
+    }
+}
+
 /// File count statistics for a vector store.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileCounts {
@@ -1561,5 +1572,24 @@ mod tests {
             "Expected Validation error, got: {:?}",
             err
         );
+    }
+
+    // --- Cycle 6.3: Display for VectorStoreStatus ---
+
+    #[test]
+    fn test_vector_store_status_display_matches_serde() {
+        let pairs = [
+            (VectorStoreStatus::InProgress, "in_progress"),
+            (VectorStoreStatus::Completed, "completed"),
+            (VectorStoreStatus::Expired, "expired"),
+        ];
+        for (status, expected) in pairs {
+            assert_eq!(
+                status.to_string(),
+                expected,
+                "Display mismatch for {:?}",
+                status
+            );
+        }
     }
 }

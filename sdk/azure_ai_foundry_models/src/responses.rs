@@ -53,6 +53,8 @@ use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::chat::Role;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -90,8 +92,8 @@ impl Serialize for ResponseInput {
 /// A message in a response input.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseMessage {
-    /// The role of the message author (e.g., "user", "assistant", "system").
-    pub role: String,
+    /// The role of the message author.
+    pub role: Role,
     /// The text content of the message.
     ///
     /// # Limitation
@@ -103,27 +105,28 @@ pub struct ResponseMessage {
 }
 
 impl ResponseMessage {
-    /// Create a new message with the given role and content.
-    pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
+    /// Create a user message.
+    pub fn user(content: impl Into<String>) -> Self {
         Self {
-            role: role.into(),
+            role: Role::User,
             content: content.into(),
         }
     }
 
-    /// Create a user message.
-    pub fn user(content: impl Into<String>) -> Self {
-        Self::new("user", content)
-    }
-
     /// Create a system message.
     pub fn system(content: impl Into<String>) -> Self {
-        Self::new("system", content)
+        Self {
+            role: Role::System,
+            content: content.into(),
+        }
     }
 
     /// Create an assistant message.
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self::new("assistant", content)
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+        }
     }
 }
 
@@ -260,8 +263,11 @@ impl CreateResponseRequestBuilder {
     }
 
     /// Set stop sequences.
-    pub fn stop(mut self, stop: Vec<String>) -> Self {
-        self.stop = Some(stop);
+    ///
+    /// Accepts any iterable of string-like values, including `Vec<String>`,
+    /// `&[&str]`, arrays, or any iterator yielding `impl Into<String>`.
+    pub fn stop(mut self, stop: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.stop = Some(stop.into_iter().map(Into::into).collect());
         self
     }
 
@@ -635,8 +641,8 @@ mod tests {
         match &request.input {
             ResponseInput::Messages(msgs) => {
                 assert_eq!(msgs.len(), 2);
-                assert_eq!(msgs[0].role, "system");
-                assert_eq!(msgs[1].role, "user");
+                assert_eq!(msgs[0].role, crate::chat::Role::System);
+                assert_eq!(msgs[1].role, crate::chat::Role::User);
             }
             ResponseInput::Text(_) => panic!("Expected Messages, got Text"),
         }
@@ -652,7 +658,7 @@ mod tests {
             .max_output_tokens(1000)
             .frequency_penalty(0.5)
             .presence_penalty(-0.5)
-            .stop(vec!["END".into()])
+            .stop(["END"])
             .stream(false)
             .previous_response_id("resp_prev123")
             .build();
@@ -662,7 +668,7 @@ mod tests {
         assert_eq!(request.max_output_tokens, Some(1000));
         assert_eq!(request.frequency_penalty, Some(0.5));
         assert_eq!(request.presence_penalty, Some(-0.5));
-        assert_eq!(request.stop, Some(vec!["END".into()]));
+        assert_eq!(request.stop, Some(vec!["END".to_string()]));
         assert_eq!(request.stream, Some(false));
         assert_eq!(request.previous_response_id, Some("resp_prev123".into()));
     }
@@ -695,7 +701,7 @@ mod tests {
             .max_output_tokens(500)
             .frequency_penalty(0.25)
             .presence_penalty(-0.25)
-            .stop(vec!["END".into()])
+            .stop(["END"])
             .stream(true)
             .previous_response_id("resp_prev")
             .build();
@@ -1143,15 +1149,15 @@ mod tests {
     #[test]
     fn test_response_message_constructors() {
         let user = ResponseMessage::user("Hello");
-        assert_eq!(user.role, "user");
+        assert_eq!(user.role, crate::chat::Role::User);
         assert_eq!(user.content, "Hello");
 
         let system = ResponseMessage::system("Be helpful");
-        assert_eq!(system.role, "system");
+        assert_eq!(system.role, crate::chat::Role::System);
         assert_eq!(system.content, "Be helpful");
 
         let assistant = ResponseMessage::assistant("Hi there");
-        assert_eq!(assistant.role, "assistant");
+        assert_eq!(assistant.role, crate::chat::Role::Assistant);
         assert_eq!(assistant.content, "Hi there");
     }
 
@@ -1275,5 +1281,46 @@ mod tests {
             "Expected Validation error, got: {:?}",
             err
         );
+    }
+
+    // --- Cycle 6.1: stop() accepts impl IntoIterator ---
+
+    #[test]
+    fn test_stop_accepts_str_slice_responses() {
+        let request = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("Hello")
+            .stop(["stop1", "stop2"])
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["stop"], serde_json::json!(["stop1", "stop2"]));
+    }
+
+    #[test]
+    fn test_stop_accepts_iterator_responses() {
+        let stops = vec!["a".to_string(), "b".to_string()];
+        let request = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("Hello")
+            .stop(stops)
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["stop"], serde_json::json!(["a", "b"]));
+    }
+
+    // --- Cycle 6.4: ResponseMessage typed role ---
+
+    #[test]
+    fn test_response_message_typed_role_serializes() {
+        let msg = ResponseMessage::user("Hello");
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["role"], "user");
+    }
+
+    #[test]
+    fn test_response_message_typed_role_deserializes() {
+        let json = serde_json::json!({"role": "assistant", "content": "Hi"});
+        let msg: ResponseMessage = serde_json::from_value(json).unwrap();
+        assert_eq!(msg.role, crate::chat::Role::Assistant);
     }
 }

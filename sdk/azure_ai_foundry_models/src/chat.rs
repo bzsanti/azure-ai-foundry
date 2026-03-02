@@ -156,8 +156,10 @@ impl ChatCompletionRequestBuilder {
     /// Set stop sequences.
     ///
     /// The model will stop generating when it encounters any of these sequences.
-    pub fn stop(mut self, stop: Vec<String>) -> Self {
-        self.stop = Some(stop);
+    /// Accepts any iterable of string-like values, including `Vec<String>`,
+    /// `&[&str]`, arrays, or any iterator yielding `impl Into<String>`.
+    pub fn stop(mut self, stop: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.stop = Some(stop.into_iter().map(Into::into).collect());
         self
     }
 
@@ -770,7 +772,7 @@ mod tests {
             .temperature(0.7)
             .top_p(0.9)
             .max_tokens(100)
-            .stop(vec!["END".into()])
+            .stop(["END"])
             .presence_penalty(0.5)
             .frequency_penalty(0.3)
             .build();
@@ -780,7 +782,7 @@ mod tests {
         assert_eq!(request.temperature, Some(0.7));
         assert_eq!(request.top_p, Some(0.9));
         assert_eq!(request.max_tokens, Some(100));
-        assert_eq!(request.stop, Some(vec!["END".into()]));
+        assert_eq!(request.stop, Some(vec!["END".to_string()]));
         assert_eq!(request.presence_penalty, Some(0.5));
         assert_eq!(request.frequency_penalty, Some(0.3));
     }
@@ -1924,5 +1926,30 @@ data: [DONE]
         let _ = complete_stream(&client, &request).await;
 
         assert!(logs_contain("foundry::chat::complete_stream"));
+    }
+
+    // --- Cycle 6.1: stop() accepts impl IntoIterator ---
+
+    #[test]
+    fn test_stop_accepts_str_slice() {
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hi"))
+            .stop(["stop1", "stop2"])
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["stop"], serde_json::json!(["stop1", "stop2"]));
+    }
+
+    #[test]
+    fn test_stop_accepts_iterator() {
+        let stops = vec!["a".to_string(), "b".to_string()];
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hi"))
+            .stop(stops)
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["stop"], serde_json::json!(["a", "b"]));
     }
 }

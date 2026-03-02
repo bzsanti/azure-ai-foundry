@@ -228,6 +228,11 @@ pub struct FoundryClient {
     http: HttpClient,
     endpoint: Url,
     credential: FoundryCredential,
+    /// The API version sent as an `api-version` HTTP header.
+    ///
+    /// For OpenAI-compatible endpoints (models crate), this is sent as a header.
+    /// For Agent Service and Document Intelligence endpoints, callers append it
+    /// as a query parameter (`?api-version=...`) themselves.
     api_version: String,
     retry_policy: RetryPolicy,
     streaming_timeout: Duration,
@@ -826,6 +831,17 @@ impl FoundryClientBuilder {
     /// Set the API version.
     ///
     /// Defaults to [`DEFAULT_API_VERSION`] (`2025-01-01-preview`).
+    ///
+    /// # How the API version is transmitted
+    ///
+    /// The mechanism differs by endpoint type:
+    ///
+    /// - **OpenAI-compatible endpoints** (`azure_ai_foundry_models`): the version is sent
+    ///   as an `api-version` HTTP **header** on every request.
+    /// - **Agent Service and Document Intelligence endpoints** (`azure_ai_foundry_agents`,
+    ///   `azure_ai_foundry_tools`): the caller is responsible for appending the version
+    ///   as a query parameter (`?api-version=...`) to each URL, because those services
+    ///   do not accept the header form.
     pub fn api_version(mut self, version: impl Into<String>) -> Self {
         self.api_version = Some(version.into());
         self

@@ -382,6 +382,23 @@ pub enum RunStatus {
     Expired,
 }
 
+impl std::fmt::Display for RunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Queued => "queued",
+            Self::InProgress => "in_progress",
+            Self::RequiresAction => "requires_action",
+            Self::Cancelling => "cancelling",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+            Self::Completed => "completed",
+            Self::Incomplete => "incomplete",
+            Self::Expired => "expired",
+        };
+        f.write_str(s)
+    }
+}
+
 /// A run on a thread.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Run {
@@ -1515,5 +1532,30 @@ mod tests {
             "Expected Validation error, got: {:?}",
             err
         );
+    }
+
+    // --- Cycle 6.3: Display for RunStatus ---
+
+    #[test]
+    fn test_run_status_display_matches_serde() {
+        let pairs = [
+            (RunStatus::Queued, "queued"),
+            (RunStatus::InProgress, "in_progress"),
+            (RunStatus::RequiresAction, "requires_action"),
+            (RunStatus::Cancelling, "cancelling"),
+            (RunStatus::Cancelled, "cancelled"),
+            (RunStatus::Failed, "failed"),
+            (RunStatus::Completed, "completed"),
+            (RunStatus::Incomplete, "incomplete"),
+            (RunStatus::Expired, "expired"),
+        ];
+        for (status, expected) in pairs {
+            assert_eq!(
+                status.to_string(),
+                expected,
+                "Display mismatch for {:?}",
+                status
+            );
+        }
     }
 }
