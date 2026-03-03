@@ -189,6 +189,10 @@ impl ChatCompletionRequestBuilder {
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
 
+        if model.trim().is_empty() {
+            return Err(FoundryError::Builder("model cannot be empty".into()));
+        }
+
         // Validate at least one message is present
         if self.messages.is_empty() {
             return Err(FoundryError::Builder(
@@ -245,9 +249,13 @@ impl ChatCompletionRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if `model` is not set.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model` is not set, `messages` is empty, or if parameter values
+    /// (`temperature`, `top_p`, `presence_penalty`, `frequency_penalty`) are out
+    /// of range. Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> ChatCompletionRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -1952,6 +1960,23 @@ data: [DONE]
             .build();
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["stop"], serde_json::json!(["a", "b"]));
+    }
+
+    // =======================================================================
+    // M6 R5: Uniform empty-string validation
+    // =======================================================================
+
+    #[test]
+    fn test_chat_rejects_whitespace_only_model() {
+        let result = ChatCompletionRequest::builder()
+            .model("  ")
+            .message(Message::user("Hello"))
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("model cannot be empty"));
     }
 
     #[test]

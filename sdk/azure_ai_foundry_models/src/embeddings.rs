@@ -116,7 +116,9 @@ pub struct EmbeddingResponse {
 /// A single embedding in the response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EmbeddingData {
+    /// The zero-based index of this embedding in the response batch.
     pub index: u32,
+    /// The embedding vector as a list of floating-point numbers.
     pub embedding: Vec<f32>,
 }
 
@@ -297,9 +299,12 @@ impl EmbeddingRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if `model` or `input` is not set.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model` or `input` is not set, or if `input` is empty.
+    /// Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> EmbeddingRequest {
         self.try_build().expect("builder validation failed")
     }

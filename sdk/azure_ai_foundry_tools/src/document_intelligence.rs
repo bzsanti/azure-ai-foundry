@@ -284,9 +284,13 @@ impl DocumentAnalysisRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model_id` is not set, or if neither `url_source` nor
+    /// `base64_source` is provided (or both are set).
+    /// Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> DocumentAnalysisRequest {
         self.try_build().expect("builder validation failed")
     }

@@ -75,6 +75,12 @@ impl FilePurpose {
     }
 }
 
+impl std::fmt::Display for FilePurpose {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A file object stored in the service.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileObject {
@@ -204,8 +210,12 @@ pub async fn upload(
 
     let response = client
         .post_multipart(&path, move || {
-            let file_part =
-                reqwest::multipart::Part::bytes(data.to_vec()).file_name(filename_owned.clone());
+            let data_len = data.len() as u64;
+            let file_part = reqwest::multipart::Part::stream_with_length(
+                reqwest::Body::from(data.clone()),
+                data_len,
+            )
+            .file_name(filename_owned.clone());
             reqwest::multipart::Form::new()
                 .part("file", file_part)
                 .text("purpose", purpose_str.clone())
@@ -714,6 +724,42 @@ mod tests {
         assert_eq!(content.as_ref(), raw_content);
     }
 
+    // =======================================================================
+    // M2: File upload bytes fix (C1) — zero-copy on retries
+    // =======================================================================
+
+    #[tokio::test]
+    async fn test_upload_with_bytes_zero_copy() {
+        // Verifies that upload works with bytes::Bytes directly,
+        // which enables O(1) cloning inside the retry closure.
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "file-bytes",
+            "object": "file",
+            "bytes": 5,
+            "created_at": TEST_TIMESTAMP,
+            "filename": "test.bin",
+            "purpose": "assistants"
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        // Pass bytes::Bytes directly (not Vec<u8>) to exercise the zero-copy path
+        let data = bytes::Bytes::from_static(b"hello");
+        let file = upload(&client, "test.bin", data, FilePurpose::Assistants)
+            .await
+            .expect("upload with Bytes should succeed");
+
+        assert_eq!(file.id, "file-bytes");
+    }
+
     #[tokio::test]
     async fn test_get_file_rejects_path_traversal() {
         let server = MockServer::start().await;
@@ -729,5 +775,33 @@ mod tests {
             "Expected Validation error, got: {:?}",
             err
         );
+    }
+
+    #[test]
+    fn test_file_purpose_display_matches_as_str() {
+        for purpose in [
+            FilePurpose::Assistants,
+            FilePurpose::AssistantsOutput,
+            FilePurpose::FineTune,
+        ] {
+            assert_eq!(purpose.to_string(), purpose.as_str());
+        }
+    }
+
+    #[test]
+    fn test_file_purpose_display_matches_serde() {
+        for purpose in [
+            FilePurpose::Assistants,
+            FilePurpose::AssistantsOutput,
+            FilePurpose::FineTune,
+        ] {
+            let serde_val = serde_json::to_value(purpose).unwrap();
+            assert_eq!(
+                serde_val.as_str().unwrap(),
+                purpose.to_string(),
+                "Display does not match serde for {:?}",
+                purpose
+            );
+        }
     }
 }

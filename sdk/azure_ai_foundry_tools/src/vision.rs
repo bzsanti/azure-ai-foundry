@@ -260,9 +260,13 @@ impl ImageAnalysisRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `url` or `features` is not set, or if smart crop aspect ratios
+    /// are out of range. Use [`try_build`](Self::try_build) for fallible
+    /// construction.
     pub fn build(self) -> ImageAnalysisRequest {
         self.try_build().expect("builder validation failed")
     }

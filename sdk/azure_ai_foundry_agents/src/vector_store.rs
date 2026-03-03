@@ -83,11 +83,21 @@ pub struct FileCounts {
     pub total: u32,
 }
 
+/// The anchor point for vector store expiration.
+///
+/// Currently the only accepted value is `"last_active_at"`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpiresAfterAnchor {
+    /// Expiration is measured from the last time the vector store was accessed.
+    LastActiveAt,
+}
+
 /// Expiration configuration for a vector store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpiresAfter {
-    /// The anchor point for expiration (e.g., "last_active_at").
-    pub anchor: String,
+    /// The anchor point for expiration.
+    pub anchor: ExpiresAfterAnchor,
     /// Number of days until expiration.
     pub days: u32,
 }
@@ -911,7 +921,7 @@ mod tests {
         assert_eq!(store.status, VectorStoreStatus::Completed);
         assert!(store.expires_after.is_some());
         let ea = store.expires_after.unwrap();
-        assert_eq!(ea.anchor, "last_active_at");
+        assert_eq!(ea.anchor, ExpiresAfterAnchor::LastActiveAt);
         assert_eq!(ea.days, 7);
         assert_eq!(store.expires_at, Some(1700100000));
         assert_eq!(store.last_active_at, Some(TEST_TIMESTAMP));
@@ -956,7 +966,7 @@ mod tests {
             .name("Test Store")
             .file_ids(vec!["file-1".into(), "file-2".into()])
             .expires_after(ExpiresAfter {
-                anchor: "last_active_at".into(),
+                anchor: ExpiresAfterAnchor::LastActiveAt,
                 days: 30,
             })
             .metadata(serde_json::json!({"env": "test"}))
@@ -969,6 +979,25 @@ mod tests {
         assert_eq!(json["file_ids"][1], "file-2");
         assert_eq!(json["expires_after"]["days"], 30);
         assert_eq!(json["metadata"]["env"], "test");
+    }
+
+    #[test]
+    fn expires_after_anchor_serializes_to_last_active_at() {
+        let ea = ExpiresAfter {
+            anchor: ExpiresAfterAnchor::LastActiveAt,
+            days: 7,
+        };
+        let json = serde_json::to_value(&ea).unwrap();
+        assert_eq!(json["anchor"], "last_active_at");
+        assert_eq!(json["days"], 7);
+    }
+
+    #[test]
+    fn expires_after_anchor_deserializes_from_last_active_at() {
+        let json = serde_json::json!({"anchor": "last_active_at", "days": 14});
+        let ea: ExpiresAfter = serde_json::from_value(json).unwrap();
+        assert_eq!(ea.anchor, ExpiresAfterAnchor::LastActiveAt);
+        assert_eq!(ea.days, 14);
     }
 
     #[test]

@@ -86,6 +86,12 @@ impl AudioResponseFormat {
     }
 }
 
+impl std::fmt::Display for AudioResponseFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Speech format
 // ---------------------------------------------------------------------------
@@ -114,14 +120,16 @@ pub enum SpeechFormat {
 // ---------------------------------------------------------------------------
 
 /// A request to transcribe audio to text.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TranscriptionRequest {
     /// The model to use for transcription.
     pub model: String,
     /// The audio file name.
     pub filename: String,
     /// The raw audio file data.
-    pub data: Vec<u8>,
+    ///
+    /// Stored as [`bytes::Bytes`] for O(1) cloning (reference-counted).
+    pub data: bytes::Bytes,
     /// The language of the input audio in ISO-639-1 format.
     pub language: Option<String>,
     /// An optional text to guide the model's style or continue a previous segment.
@@ -151,7 +159,7 @@ impl TranscriptionRequest {
 pub struct TranscriptionRequestBuilder {
     model: Option<String>,
     filename: Option<String>,
-    data: Option<Vec<u8>>,
+    data: Option<bytes::Bytes>,
     language: Option<String>,
     prompt: Option<String>,
     response_format: Option<AudioResponseFormat>,
@@ -189,8 +197,8 @@ impl TranscriptionRequestBuilder {
     }
 
     /// Set the audio file data.
-    pub fn data(mut self, data: Vec<u8>) -> Self {
-        self.data = Some(data);
+    pub fn data(mut self, data: impl Into<bytes::Bytes>) -> Self {
+        self.data = Some(data.into());
         self
     }
 
@@ -224,14 +232,14 @@ impl TranscriptionRequestBuilder {
         let model = self
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
-        if model.is_empty() {
+        if model.trim().is_empty() {
             return Err(FoundryError::Builder("model cannot be empty".into()));
         }
 
         let filename = self
             .filename
             .ok_or_else(|| FoundryError::Builder("filename is required".into()))?;
-        if filename.is_empty() {
+        if filename.trim().is_empty() {
             return Err(FoundryError::Builder("filename cannot be empty".into()));
         }
 
@@ -261,9 +269,12 @@ impl TranscriptionRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model`, `filename`, or `data` is not set, or if `temperature`
+    /// is out of range. Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> TranscriptionRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -277,14 +288,16 @@ impl TranscriptionRequestBuilder {
 ///
 /// Translation always outputs English. For same-language transcription,
 /// use [`TranscriptionRequest`] instead.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TranslationRequest {
     /// The model to use for translation.
     pub model: String,
     /// The audio file name.
     pub filename: String,
     /// The raw audio file data.
-    pub data: Vec<u8>,
+    ///
+    /// Stored as [`bytes::Bytes`] for O(1) cloning (reference-counted).
+    pub data: bytes::Bytes,
     /// An optional text to guide the model's style or continue a previous segment.
     pub prompt: Option<String>,
     /// The format of the transcript output.
@@ -311,7 +324,7 @@ impl TranslationRequest {
 pub struct TranslationRequestBuilder {
     model: Option<String>,
     filename: Option<String>,
-    data: Option<Vec<u8>>,
+    data: Option<bytes::Bytes>,
     prompt: Option<String>,
     response_format: Option<AudioResponseFormat>,
     temperature: Option<f32>,
@@ -347,8 +360,8 @@ impl TranslationRequestBuilder {
     }
 
     /// Set the audio file data.
-    pub fn data(mut self, data: Vec<u8>) -> Self {
-        self.data = Some(data);
+    pub fn data(mut self, data: impl Into<bytes::Bytes>) -> Self {
+        self.data = Some(data.into());
         self
     }
 
@@ -376,14 +389,14 @@ impl TranslationRequestBuilder {
         let model = self
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
-        if model.is_empty() {
+        if model.trim().is_empty() {
             return Err(FoundryError::Builder("model cannot be empty".into()));
         }
 
         let filename = self
             .filename
             .ok_or_else(|| FoundryError::Builder("filename is required".into()))?;
-        if filename.is_empty() {
+        if filename.trim().is_empty() {
             return Err(FoundryError::Builder("filename cannot be empty".into()));
         }
 
@@ -412,9 +425,12 @@ impl TranslationRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model`, `filename`, or `data` is not set, or if `temperature`
+    /// is out of range. Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> TranslationRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -503,14 +519,14 @@ impl SpeechRequestBuilder {
         let model = self
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
-        if model.is_empty() {
+        if model.trim().is_empty() {
             return Err(FoundryError::Builder("model cannot be empty".into()));
         }
 
         let input = self
             .input
             .ok_or_else(|| FoundryError::Builder("input is required".into()))?;
-        if input.is_empty() {
+        if input.trim().is_empty() {
             return Err(FoundryError::Builder("input cannot be empty".into()));
         }
         if input.len() > MAX_SPEECH_INPUT_LENGTH {
@@ -523,7 +539,7 @@ impl SpeechRequestBuilder {
         let voice = self
             .voice
             .ok_or_else(|| FoundryError::Builder("voice is required".into()))?;
-        if voice.is_empty() {
+        if voice.trim().is_empty() {
             return Err(FoundryError::Builder("voice cannot be empty".into()));
         }
 
@@ -544,9 +560,12 @@ impl SpeechRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model`, `input`, or `voice` is not set, or if `speed` is out
+    /// of range. Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> SpeechRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -615,25 +634,33 @@ pub struct TranscriptionSegment {
 // ---------------------------------------------------------------------------
 
 /// Build a multipart form for audio transcription/translation.
+///
+/// Accepts [`bytes::Bytes`] for the audio data — cloning `Bytes` is O(1)
+/// (reference-counted), so this avoids the O(n) `to_vec()` heap copy that
+/// was previously needed on every retry attempt. Owned `String` parameters
+/// avoid redundant `.to_string()` allocations.
 fn build_audio_form(
-    data: &[u8],
-    filename: &str,
-    model: &str,
-    language: Option<&str>,
-    prompt: Option<&str>,
+    data: bytes::Bytes,
+    filename: String,
+    model: String,
+    language: Option<String>,
+    prompt: Option<String>,
     response_format: Option<AudioResponseFormat>,
     temperature: Option<f32>,
 ) -> reqwest::multipart::Form {
-    let file_part = reqwest::multipart::Part::bytes(data.to_vec()).file_name(filename.to_string());
+    let data_len = data.len() as u64;
+    let file_part =
+        reqwest::multipart::Part::stream_with_length(reqwest::Body::from(data), data_len)
+            .file_name(filename);
     let mut form = reqwest::multipart::Form::new()
         .part("file", file_part)
-        .text("model", model.to_string());
+        .text("model", model);
 
     if let Some(lang) = language {
-        form = form.text("language", lang.to_string());
+        form = form.text("language", lang);
     }
     if let Some(p) = prompt {
-        form = form.text("prompt", p.to_string());
+        form = form.text("prompt", p);
     }
     if let Some(fmt) = response_format {
         form = form.text("response_format", fmt.as_str());
@@ -683,24 +710,20 @@ pub async fn transcribe(
 ) -> FoundryResult<TranscriptionResponse> {
     tracing::debug!("sending transcription request");
 
-    let data = request.data.clone();
-    let filename = request.filename.clone();
-    let model = request.model.clone();
-    let language = request.language.clone();
-    let prompt = request.prompt.clone();
-    let response_format = request.response_format;
-    let temperature = request.temperature;
+    // Clone the request once — Bytes::clone is O(1), String::clone is O(n)
+    // but unavoidable since the closure must be callable on every retry.
+    let req = request.clone();
 
     let response = client
         .post_multipart("/openai/v1/audio/transcriptions", move || {
             build_audio_form(
-                &data,
-                &filename,
-                &model,
-                language.as_deref(),
-                prompt.as_deref(),
-                response_format,
-                temperature,
+                req.data.clone(),
+                req.filename.clone(),
+                req.model.clone(),
+                req.language.clone(),
+                req.prompt.clone(),
+                req.response_format,
+                req.temperature,
             )
         })
         .await?;
@@ -746,23 +769,20 @@ pub async fn translate(
 ) -> FoundryResult<TranslationResponse> {
     tracing::debug!("sending translation request");
 
-    let data = request.data.clone();
-    let filename = request.filename.clone();
-    let model = request.model.clone();
-    let prompt = request.prompt.clone();
-    let response_format = request.response_format;
-    let temperature = request.temperature;
+    // Clone the request once — Bytes::clone is O(1), String::clone is O(n)
+    // but unavoidable since the closure must be callable on every retry.
+    let req = request.clone();
 
     let response = client
         .post_multipart("/openai/v1/audio/translations", move || {
             build_audio_form(
-                &data,
-                &filename,
-                &model,
+                req.data.clone(),
+                req.filename.clone(),
+                req.model.clone(),
                 None, // translation has no language parameter
-                prompt.as_deref(),
-                response_format,
-                temperature,
+                req.prompt.clone(),
+                req.response_format,
+                req.temperature,
             )
         })
         .await?;
@@ -843,7 +863,7 @@ mod tests {
 
         assert_eq!(request.model, "whisper-1");
         assert_eq!(request.filename, "test.wav");
-        assert_eq!(request.data, vec![1, 2, 3]);
+        assert_eq!(request.data.as_ref(), &[1, 2, 3]);
         assert!(request.language.is_none());
         assert!(request.prompt.is_none());
         assert!(request.response_format.is_none());
@@ -1492,7 +1512,7 @@ mod tests {
             .filename("a.wav")
             .data(vec![1u8, 2, 3])
             .build();
-        assert_eq!(req.data, vec![1u8, 2, 3]);
+        assert_eq!(req.data.as_ref(), &[1u8, 2, 3]);
     }
 
     // --- Optional params end-to-end tests ---
@@ -1662,6 +1682,60 @@ mod tests {
         assert!(!debug.contains("[0, 0, 0"));
     }
 
+    // =======================================================================
+    // M1: Audio bytes migration (C2 + R6 + O8)
+    // =======================================================================
+
+    #[test]
+    fn test_transcription_request_data_is_bytes() {
+        let data = bytes::Bytes::from_static(b"audio data");
+        let req = TranscriptionRequest::builder()
+            .model("whisper-1")
+            .filename("audio.wav")
+            .data(data.clone())
+            .build();
+        // Clone is O(1) — both point to same allocation
+        let cloned = req.data.clone();
+        assert_eq!(cloned.len(), 10);
+        assert_eq!(cloned.as_ref(), b"audio data");
+    }
+
+    #[test]
+    fn test_translation_request_data_is_bytes() {
+        let data = bytes::Bytes::from_static(b"audio fr");
+        let req = TranslationRequest::builder()
+            .model("whisper-1")
+            .filename("audio_fr.wav")
+            .data(data.clone())
+            .build();
+        let cloned = req.data.clone();
+        assert_eq!(cloned.as_ref(), b"audio fr");
+    }
+
+    #[test]
+    fn test_translation_request_is_clone() {
+        let req = TranslationRequest::builder()
+            .model("whisper-1")
+            .filename("audio.wav")
+            .data(bytes::Bytes::from_static(b"test"))
+            .build();
+        let cloned = req.clone();
+        assert_eq!(cloned.model, req.model);
+        assert_eq!(cloned.data, req.data);
+    }
+
+    #[test]
+    fn test_transcription_request_is_clone() {
+        let req = TranscriptionRequest::builder()
+            .model("whisper-1")
+            .filename("audio.wav")
+            .data(bytes::Bytes::from_static(b"test"))
+            .build();
+        let cloned = req.clone();
+        assert_eq!(cloned.model, req.model);
+        assert_eq!(cloned.data, req.data);
+    }
+
     #[test]
     fn test_speech_builder_implements_debug() {
         let builder = SpeechRequest::builder()
@@ -1671,5 +1745,111 @@ mod tests {
         let debug = format!("{:?}", builder);
         assert!(debug.contains("SpeechRequestBuilder"));
         assert!(debug.contains("tts-1"));
+    }
+
+    #[test]
+    fn test_transcription_rejects_whitespace_only_model() {
+        let result = TranscriptionRequest::builder()
+            .model("  ")
+            .filename("audio.wav")
+            .data(bytes::Bytes::from_static(b"data"))
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("model cannot be empty"));
+    }
+
+    #[test]
+    fn test_transcription_rejects_whitespace_only_filename() {
+        let result = TranscriptionRequest::builder()
+            .model("whisper-1")
+            .filename("  ")
+            .data(bytes::Bytes::from_static(b"data"))
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("filename cannot be empty"));
+    }
+
+    #[test]
+    fn test_translation_rejects_whitespace_only_model() {
+        let result = TranslationRequest::builder()
+            .model("  ")
+            .filename("audio.wav")
+            .data(bytes::Bytes::from_static(b"data"))
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("model cannot be empty"));
+    }
+
+    #[test]
+    fn test_speech_rejects_whitespace_only_model() {
+        let result = SpeechRequest::builder()
+            .model("  ")
+            .input("Hello")
+            .voice("alloy")
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("model cannot be empty"));
+    }
+
+    #[test]
+    fn test_speech_rejects_whitespace_only_input() {
+        let result = SpeechRequest::builder()
+            .model("tts-1")
+            .input("  ")
+            .voice("alloy")
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("input cannot be empty"));
+    }
+
+    #[test]
+    fn test_speech_rejects_whitespace_only_voice() {
+        let result = SpeechRequest::builder()
+            .model("tts-1")
+            .input("Hello")
+            .voice("  ")
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("voice cannot be empty"));
+    }
+
+    #[test]
+    fn test_audio_response_format_display_matches_as_str() {
+        use AudioResponseFormat::*;
+        for fmt in [Json, Text, Srt, Vtt, VerboseJson] {
+            assert_eq!(fmt.to_string(), fmt.as_str());
+        }
+    }
+
+    #[test]
+    fn test_audio_response_format_display_matches_serde() {
+        use AudioResponseFormat::*;
+        for fmt in [Json, Text, Srt, Vtt, VerboseJson] {
+            let serde_val = serde_json::to_value(fmt).unwrap();
+            assert_eq!(
+                serde_val.as_str().unwrap(),
+                fmt.to_string(),
+                "Display does not match serde for {:?}",
+                fmt
+            );
+        }
     }
 }

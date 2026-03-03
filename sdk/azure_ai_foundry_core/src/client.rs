@@ -342,7 +342,11 @@ impl FoundryClient {
             tokio::time::sleep(backoff).await;
         }
 
-        unreachable!("retry loop should return before reaching here")
+        Err(FoundryError::Api {
+            code: "InternalError".into(),
+            message: "retry loop exhausted without returning — this is a bug, please report it"
+                .into(),
+        })
     }
 
     /// Send a GET request to the API with automatic retry on transient errors.
@@ -682,21 +686,30 @@ impl FoundryClient {
 
     /// Redact the value after a case-insensitive header pattern (e.g., `"api-key:"`).
     ///
-    /// Computes the lowercase of the remaining string once per iteration to avoid
-    /// repeated `to_lowercase()` allocations. Collects all replacement ranges first,
-    /// then applies them in reverse order so earlier indices remain valid.
+    /// Performs case-insensitive searching directly on the original string using
+    /// char-by-char lowercase comparison, so all byte indices remain valid for the
+    /// original string. This avoids the pitfall of computing indices on a
+    /// `to_lowercase()` copy (whose byte length can differ from the original for
+    /// characters like Turkish İ).
+    ///
+    /// Collects all replacement ranges first, then applies them in reverse order
+    /// so earlier indices remain valid.
     fn redact_header_value_case_insensitive(result: &mut String, header_lower: &str) {
         let redacted = "[REDACTED]";
-        // Collect all (value_start, value_end) ranges to replace
         let mut ranges: Vec<(usize, usize)> = Vec::new();
-        let lower_result = result.to_lowercase();
         let mut search_start = 0;
 
-        while search_start < lower_result.len() {
-            if let Some(relative_pos) = lower_result[search_start..].find(header_lower) {
-                let key_pos = search_start + relative_pos + header_lower.len();
+        while search_start < result.len() {
+            if let Some(match_byte_pos) =
+                Self::find_case_insensitive(&result[search_start..], header_lower)
+            {
+                let key_pos = search_start + match_byte_pos + header_lower.len();
 
-                // Skip whitespace after the colon
+                if key_pos >= result.len() {
+                    break;
+                }
+
+                // Skip whitespace after the colon (indices are on `result` directly)
                 let value_start = result[key_pos..]
                     .find(|c: char| !c.is_whitespace())
                     .map(|pos| key_pos + pos)
@@ -726,6 +739,48 @@ impl FoundryClient {
         for (start, end) in ranges.into_iter().rev() {
             result.replace_range(start..end, redacted);
         }
+    }
+
+    /// Case-insensitive substring search that returns the byte offset in `haystack`
+    /// where the match starts. `needle` must be lowercase ASCII.
+    ///
+    /// Works by iterating over `haystack` char-by-char, lowercasing each character
+    /// and comparing against `needle`. All returned byte offsets refer to `haystack`.
+    fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+        if needle.is_empty() {
+            return Some(0);
+        }
+
+        let needle_bytes = needle.as_bytes();
+
+        haystack
+            .char_indices()
+            .map(|(byte_idx, _)| byte_idx)
+            .find(|&byte_idx| Self::matches_case_insensitive_at(haystack, byte_idx, needle_bytes))
+    }
+
+    /// Check if `haystack` starting at `start` matches `needle_lower` (lowercase ASCII bytes)
+    /// using case-insensitive comparison.
+    fn matches_case_insensitive_at(haystack: &str, start: usize, needle_lower: &[u8]) -> bool {
+        let hay = &haystack[start..];
+        let mut needle_pos = 0;
+
+        for ch in hay.chars() {
+            // Compare each lowercased character of haystack against needle bytes.
+            // needle is always lowercase ASCII, so each needle char is exactly 1 byte.
+            for lower_ch in ch.to_lowercase() {
+                if needle_pos >= needle_lower.len() {
+                    return true;
+                }
+                // Since needle is ASCII, each byte is one char
+                if lower_ch as u32 > 127 || lower_ch as u8 != needle_lower[needle_pos] {
+                    return false;
+                }
+                needle_pos += 1;
+            }
+        }
+
+        needle_pos >= needle_lower.len()
     }
 
     /// Truncate a message if it exceeds the maximum length.
@@ -842,6 +897,12 @@ impl FoundryClientBuilder {
     ///   `azure_ai_foundry_tools`): the caller is responsible for appending the version
     ///   as a query parameter (`?api-version=...`) to each URL, because those services
     ///   do not accept the header form.
+    ///
+    /// # Note
+    ///
+    /// This setting controls the API version for model inference endpoints only.
+    /// The Agents Service endpoints use a separately hardcoded version string
+    /// (`azure_ai_foundry_agents`). See that crate's documentation for details.
     pub fn api_version(mut self, version: impl Into<String>) -> Self {
         self.api_version = Some(version.into());
         self
@@ -2198,6 +2259,92 @@ mod tests {
         assert!(
             !result.contains("lower456"),
             "Lowercase key value should be redacted"
+        );
+    }
+
+    // --- UTF-8 boundary safety tests for sanitize_error_message ---
+
+    #[test]
+    fn sanitize_error_message_with_multibyte_before_api_key() {
+        // "café" contains a 2-byte UTF-8 codepoint (é = 0xC3 0xA9).
+        // Without the fix this panics on a UTF-8 boundary when applying
+        // replace_range with indices computed on the lowercase copy.
+        let msg = "café api-key: supersecret123 failed";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("supersecret123"),
+            "secret should be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("[REDACTED]"),
+            "should contain redaction marker, got: {result}"
+        );
+    }
+
+    #[test]
+    fn sanitize_error_message_with_emoji_before_api_key() {
+        // Emoji are 4-byte UTF-8 codepoints.
+        let msg = "error 🚀 api-key: topsecret456 endpoint";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("topsecret456"),
+            "secret should be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("[REDACTED]"),
+            "should contain redaction marker, got: {result}"
+        );
+    }
+
+    #[test]
+    fn sanitize_error_message_multibyte_in_key_value_itself() {
+        // Multi-byte characters in the value region must not cause boundary issues.
+        let msg = "api-key: sécrêt123 was rejected";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("sécrêt123"),
+            "multi-byte secret should be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("[REDACTED]"),
+            "should contain redaction marker, got: {result}"
+        );
+    }
+
+    #[test]
+    fn sanitize_error_message_preserves_case_with_multibyte() {
+        // The fix must preserve original case for non-redacted portions.
+        let msg = "CAFÉ api-key: secret123 FAILED";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            result.contains("CAFÉ"),
+            "original case should be preserved, got: {result}"
+        );
+        assert!(
+            result.contains("FAILED"),
+            "original case should be preserved, got: {result}"
+        );
+        assert!(
+            !result.contains("secret123"),
+            "secret should be redacted, got: {result}"
+        );
+    }
+
+    #[test]
+    fn sanitize_error_message_turkish_i_with_multibyte_value() {
+        // Turkish İ (U+0130, 2 bytes) lowercases to "i̇" (3 bytes: U+0069 + U+0307).
+        // When a multi-byte char follows "api-key:" immediately, the +1 byte offset
+        // shift causes key_pos to land inside the multi-byte char in the original,
+        // triggering a panic on str slicing at a non-char-boundary.
+        let msg = "İapi-key:ésecret";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("ésecret"),
+            "secret should be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("[REDACTED]"),
+            "should contain redaction marker, got: {result}"
         );
     }
 

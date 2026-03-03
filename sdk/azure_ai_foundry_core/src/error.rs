@@ -178,11 +178,77 @@ impl FoundryError {
             message: message.into(),
         }
     }
+
+    /// Returns `true` if this error is likely transient and the request may
+    /// succeed on retry.
+    ///
+    /// Retryable errors are HTTP 429 (rate limit), 500, 502, 503, and 504.
+    /// All other error types (validation, auth, client errors) are not retryable.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Http { status, .. } => crate::client::is_retriable_status(*status),
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- is_retryable() tests ---
+
+    #[test]
+    fn foundry_error_is_retryable_for_rate_limit() {
+        let err = FoundryError::http(429, "Too Many Requests");
+        assert!(err.is_retryable(), "429 should be retryable");
+    }
+
+    #[test]
+    fn foundry_error_is_retryable_for_server_errors() {
+        for status in [500, 502, 503, 504] {
+            let err = FoundryError::http(status, "Server Error");
+            assert!(err.is_retryable(), "{status} should be retryable");
+        }
+    }
+
+    #[test]
+    fn foundry_error_is_not_retryable_for_client_error() {
+        let err = FoundryError::http(400, "Bad Request");
+        assert!(!err.is_retryable(), "400 should not be retryable");
+    }
+
+    #[test]
+    fn foundry_error_is_not_retryable_for_not_found() {
+        let err = FoundryError::http(404, "Not Found");
+        assert!(!err.is_retryable(), "404 should not be retryable");
+    }
+
+    #[test]
+    fn foundry_error_is_not_retryable_for_auth() {
+        let err = FoundryError::auth("unauthorized");
+        assert!(!err.is_retryable(), "auth errors should not be retryable");
+    }
+
+    #[test]
+    fn foundry_error_is_not_retryable_for_validation() {
+        let err = FoundryError::validation("missing field");
+        assert!(
+            !err.is_retryable(),
+            "validation errors should not be retryable"
+        );
+    }
+
+    #[test]
+    fn foundry_error_is_not_retryable_for_builder() {
+        let err = FoundryError::Builder("bad config".into());
+        assert!(
+            !err.is_retryable(),
+            "builder errors should not be retryable"
+        );
+    }
+
+    // --- Error display tests ---
 
     #[test]
     fn http_error_display() {

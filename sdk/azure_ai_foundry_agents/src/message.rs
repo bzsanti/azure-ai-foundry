@@ -120,9 +120,12 @@ impl MessageCreateRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `content` is not set or is empty.
+    /// Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> MessageCreateRequest {
         self.try_build().expect("builder validation failed")
     }

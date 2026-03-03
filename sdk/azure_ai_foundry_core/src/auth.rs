@@ -284,6 +284,12 @@ impl FoundryCredential {
     ///
     /// * `options` - Token request options for advanced scenarios.
     ///
+    /// # Lifetime
+    ///
+    /// The lifetime on `TokenRequestOptions<'_>` ties the options to the scope of
+    /// this call. Options are passed directly to the underlying identity provider
+    /// and are not retained. Stack-allocated claims or tenant IDs are safe to pass.
+    ///
     /// # Errors
     ///
     /// Returns an error if this is an API key credential or if token acquisition fails.
@@ -306,13 +312,23 @@ impl FoundryCredential {
     }
 
     /// Deprecated: use [`fetch_fresh_token()`](Self::fetch_fresh_token) instead.
-    #[deprecated(since = "0.3.0", note = "Use fetch_fresh_token() instead")]
+    ///
+    /// This method will be **removed in v0.8.0**.
+    #[deprecated(
+        since = "0.3.0",
+        note = "Use fetch_fresh_token() instead. This method will be removed in v0.8.0."
+    )]
     pub async fn get_token(&self) -> FoundryResult<AccessToken> {
         self.fetch_fresh_token().await
     }
 
     /// Deprecated: use [`fetch_fresh_token_with_options()`](Self::fetch_fresh_token_with_options) instead.
-    #[deprecated(since = "0.3.0", note = "Use fetch_fresh_token_with_options() instead")]
+    ///
+    /// This method will be **removed in v0.8.0**.
+    #[deprecated(
+        since = "0.3.0",
+        note = "Use fetch_fresh_token_with_options() instead. This method will be removed in v0.8.0."
+    )]
     pub async fn get_token_with_options(
         &self,
         options: TokenRequestOptions<'_>,

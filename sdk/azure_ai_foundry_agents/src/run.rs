@@ -215,9 +215,12 @@ impl RunCreateRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `assistant_id` is not set, or if `temperature` or `top_p` is
+    /// out of range. Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> RunCreateRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -238,9 +241,9 @@ pub struct ToolOutput {
 
 /// Request to submit tool outputs for a run.
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct SubmitToolOutputsRequest {
+pub(crate) struct SubmitToolOutputsRequest<'a> {
     /// The tool outputs to submit.
-    pub tool_outputs: Vec<ToolOutput>,
+    pub tool_outputs: &'a [ToolOutput],
 }
 
 /// Request to create a thread and run in a single call.
@@ -277,8 +280,8 @@ pub struct ThreadCreateConfig {
 /// An initial message to add when creating a thread.
 #[derive(Debug, Clone, Serialize)]
 pub struct InitialMessage {
-    /// Role of the message (typically "user").
-    pub role: String,
+    /// Role of the message.
+    pub role: crate::message::MessageRole,
     /// Content of the message.
     pub content: String,
 }
@@ -310,7 +313,7 @@ impl CreateThreadAndRunRequestBuilder {
     /// Add an initial user message.
     pub fn message(mut self, content: impl Into<String>) -> Self {
         self.messages.push(InitialMessage {
-            role: "user".into(),
+            role: crate::message::MessageRole::User,
             content: content.into(),
         });
         self
@@ -361,9 +364,12 @@ impl CreateThreadAndRunRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `assistant_id` is not set.
+    /// Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> CreateThreadAndRunRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -469,12 +475,20 @@ pub struct Run {
     pub metadata: Option<serde_json::Value>,
 }
 
+/// The type of action required from the client.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequiredActionType {
+    /// The client must submit tool outputs.
+    SubmitToolOutputs,
+}
+
 /// Action required from the client.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RequiredAction {
     /// The type of action required.
     #[serde(rename = "type")]
-    pub action_type: String,
+    pub action_type: RequiredActionType,
 
     /// Tool calls that need outputs submitted.
     pub submit_tool_outputs: Option<SubmitToolOutputs>,
@@ -495,7 +509,7 @@ pub struct ToolCall {
 
     /// The type of tool call.
     #[serde(rename = "type")]
-    pub call_type: String,
+    pub call_type: crate::run_step::ToolCallType,
 
     /// The function that was called.
     pub function: Option<FunctionCall>,
@@ -522,9 +536,11 @@ pub struct RunError {
 }
 
 /// Deprecated: Use [`azure_ai_foundry_core::models::Usage`] instead.
+///
+/// This type alias will be **removed in v0.8.0**.
 #[deprecated(
     since = "0.7.0",
-    note = "Use azure_ai_foundry_core::models::Usage instead"
+    note = "Use azure_ai_foundry_core::models::Usage instead. This alias will be removed in v0.8.0."
 )]
 pub type RunUsage = Usage;
 
@@ -725,10 +741,10 @@ pub async fn poll_until_complete(
                 attempts += 1;
                 if let Some(max) = max_attempts {
                     if attempts >= max {
-                        return Err(FoundryError::Api {
-                            code: "PollTimeout".into(),
-                            message: format!("run did not complete after {} poll attempts", max),
-                        });
+                        return Err(FoundryError::validation(format!(
+                            "run did not complete after {} poll attempts",
+                            max
+                        )));
                     }
                 }
                 tracing::trace!(status = ?run.status, attempt = attempts, "run still in progress");
@@ -869,9 +885,7 @@ pub async fn submit_tool_outputs(
         "/threads/{}/runs/{}/submit_tool_outputs?{}",
         thread_id, run_id, API_VERSION
     );
-    let request = SubmitToolOutputsRequest {
-        tool_outputs: tool_outputs.to_vec(),
-    };
+    let request = SubmitToolOutputsRequest { tool_outputs };
     let response = client.post(&path, &request).await?;
     let run = response.json::<Run>().await?;
 
@@ -1279,7 +1293,7 @@ mod tests {
         assert!(run.required_action.is_some());
 
         let action = run.required_action.unwrap();
-        assert_eq!(action.action_type, "submit_tool_outputs");
+        assert_eq!(action.action_type, RequiredActionType::SubmitToolOutputs);
 
         let tool_calls = action.submit_tool_outputs.unwrap().tool_calls;
         assert_eq!(tool_calls.len(), 1);
@@ -1304,17 +1318,18 @@ mod tests {
 
     #[test]
     fn test_submit_tool_outputs_request_serialization() {
+        let outputs = [
+            ToolOutput {
+                tool_call_id: "call_1".to_string(),
+                output: "result1".to_string(),
+            },
+            ToolOutput {
+                tool_call_id: "call_2".to_string(),
+                output: "result2".to_string(),
+            },
+        ];
         let request = SubmitToolOutputsRequest {
-            tool_outputs: vec![
-                ToolOutput {
-                    tool_call_id: "call_1".to_string(),
-                    output: "result1".to_string(),
-                },
-                ToolOutput {
-                    tool_call_id: "call_2".to_string(),
-                    output: "result2".to_string(),
-                },
-            ],
+            tool_outputs: &outputs,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1502,8 +1517,9 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("PollTimeout"),
-            "Expected PollTimeout, got: {}",
+            err.to_string()
+                .contains("did not complete after 3 poll attempts"),
+            "Expected poll timeout message, got: {}",
             err
         );
     }
@@ -1565,6 +1581,92 @@ mod tests {
             "Expected Validation error, got: {:?}",
             err
         );
+    }
+
+    // =======================================================================
+    // M3: Stringly-typed enums (R1 + R2 + R3)
+    // =======================================================================
+
+    // --- R1: RequiredActionType enum ---
+
+    #[test]
+    fn test_required_action_type_deserialization() {
+        let json = serde_json::json!({
+            "type": "submit_tool_outputs",
+            "submit_tool_outputs": {
+                "tool_calls": []
+            }
+        });
+        let action: RequiredAction = serde_json::from_value(json).unwrap();
+        assert_eq!(action.action_type, RequiredActionType::SubmitToolOutputs);
+    }
+
+    #[test]
+    fn test_tool_call_type_in_run_deserialization() {
+        let json = serde_json::json!({
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "foo", "arguments": "{}"}
+        });
+        let tc: ToolCall = serde_json::from_value(json).unwrap();
+        assert_eq!(tc.call_type, crate::run_step::ToolCallType::Function);
+    }
+
+    // --- R3: InitialMessage uses MessageRole ---
+
+    #[test]
+    fn test_initial_message_serializes_role_as_string() {
+        let msg = InitialMessage {
+            role: crate::message::MessageRole::User,
+            content: "hello".into(),
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["role"], "user");
+    }
+
+    // --- M4 R7: Poll timeout uses Validation, not Api ---
+
+    #[tokio::test]
+    async fn test_poll_timeout_returns_validation_error() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_val/runs/run_val"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "run_val",
+                "object": "thread.run",
+                "thread_id": "thread_val",
+                "assistant_id": "asst_1",
+                "status": "in_progress",
+                "created_at": TEST_TIMESTAMP
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let result = poll_until_complete(
+            &client,
+            "thread_val",
+            "run_val",
+            Duration::from_millis(1),
+            Some(2),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+        assert!(err
+            .to_string()
+            .contains("did not complete after 2 poll attempts"));
     }
 
     // --- Cycle 6.3: Display for RunStatus ---

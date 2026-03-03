@@ -51,6 +51,19 @@ pub enum RunStepStatus {
     Expired,
 }
 
+impl std::fmt::Display for RunStepStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::InProgress => "in_progress",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+            Self::Completed => "completed",
+            Self::Expired => "expired",
+        };
+        f.write_str(s)
+    }
+}
+
 /// The type of action taken during a run step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,6 +72,16 @@ pub enum StepType {
     MessageCreation,
     /// The step invoked one or more tools.
     ToolCalls,
+}
+
+impl std::fmt::Display for StepType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::MessageCreation => "message_creation",
+            Self::ToolCalls => "tool_calls",
+        };
+        f.write_str(s)
+    }
 }
 
 /// The type of tool called within a run step.
@@ -605,6 +628,43 @@ mod tests {
             .expect("should succeed");
 
         assert!(steps.data.is_empty());
+    }
+
+    // --- M5 R8: Display for RunStepStatus and StepType ---
+
+    #[test]
+    fn test_run_step_status_display_matches_serde() {
+        let pairs = [
+            (RunStepStatus::InProgress, "in_progress"),
+            (RunStepStatus::Cancelled, "cancelled"),
+            (RunStepStatus::Failed, "failed"),
+            (RunStepStatus::Completed, "completed"),
+            (RunStepStatus::Expired, "expired"),
+        ];
+        for (status, expected) in pairs {
+            assert_eq!(
+                status.to_string(),
+                expected,
+                "Display mismatch for {:?}",
+                status
+            );
+        }
+    }
+
+    #[test]
+    fn test_step_type_display_matches_serde() {
+        let pairs = [
+            (StepType::MessageCreation, "message_creation"),
+            (StepType::ToolCalls, "tool_calls"),
+        ];
+        for (step_type, expected) in pairs {
+            assert_eq!(
+                step_type.to_string(),
+                expected,
+                "Display mismatch for {:?}",
+                step_type
+            );
+        }
     }
 
     #[tokio::test]

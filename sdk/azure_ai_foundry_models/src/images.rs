@@ -170,8 +170,8 @@ pub struct ImageGenerationRequest {
     pub prompt: String,
 
     /// The number of images to generate (1-10).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub n: Option<u32>,
+    #[serde(rename = "n", skip_serializing_if = "Option::is_none")]
+    pub count: Option<u32>,
 
     /// The size of the generated images.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,7 +196,7 @@ impl ImageGenerationRequest {
         ImageGenerationRequestBuilder {
             model: None,
             prompt: None,
-            n: None,
+            count: None,
             size: None,
             quality: None,
             response_format: None,
@@ -210,7 +210,7 @@ impl ImageGenerationRequest {
 pub struct ImageGenerationRequestBuilder {
     model: Option<String>,
     prompt: Option<String>,
-    n: Option<u32>,
+    count: Option<u32>,
     size: Option<ImageSize>,
     quality: Option<ImageQuality>,
     response_format: Option<ImageResponseFormat>,
@@ -231,8 +231,8 @@ impl ImageGenerationRequestBuilder {
     }
 
     /// Set the number of images to generate (1-10).
-    pub fn n(mut self, n: u32) -> Self {
-        self.n = Some(n);
+    pub fn count(mut self, count: u32) -> Self {
+        self.count = Some(count);
         self
     }
 
@@ -266,27 +266,29 @@ impl ImageGenerationRequestBuilder {
         let model = self
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
-        if model.is_empty() {
+        if model.trim().is_empty() {
             return Err(FoundryError::Builder("model cannot be empty".into()));
         }
 
         let prompt = self
             .prompt
             .ok_or_else(|| FoundryError::Builder("prompt is required".into()))?;
-        if prompt.is_empty() {
+        if prompt.trim().is_empty() {
             return Err(FoundryError::Builder("prompt cannot be empty".into()));
         }
 
-        if let Some(n) = self.n {
-            if !(1..=10).contains(&n) {
-                return Err(FoundryError::Builder("n must be between 1 and 10".into()));
+        if let Some(count) = self.count {
+            if !(1..=10).contains(&count) {
+                return Err(FoundryError::Builder(
+                    "count must be between 1 and 10".into(),
+                ));
             }
         }
 
         Ok(ImageGenerationRequest {
             model,
             prompt,
-            n: self.n,
+            count: self.count,
             size: self.size,
             quality: self.quality,
             response_format: self.response_format,
@@ -294,9 +296,12 @@ impl ImageGenerationRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model` or `prompt` is not set, or if `count` is out of range.
+    /// Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> ImageGenerationRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -322,7 +327,7 @@ pub struct ImageEditRequest {
     /// The filename of the mask image.
     pub mask_filename: Option<String>,
     /// The number of images to generate (1-10).
-    pub n: Option<u32>,
+    pub count: Option<u32>,
     /// The size of the generated images.
     pub size: Option<ImageSize>,
     /// The quality of the generated images.
@@ -341,7 +346,7 @@ impl ImageEditRequest {
             prompt: None,
             mask: None,
             mask_filename: None,
-            n: None,
+            count: None,
             size: None,
             quality: None,
             response_format: None,
@@ -357,7 +362,7 @@ pub struct ImageEditRequestBuilder {
     prompt: Option<String>,
     mask: Option<Vec<u8>>,
     mask_filename: Option<String>,
-    n: Option<u32>,
+    count: Option<u32>,
     size: Option<ImageSize>,
     quality: Option<ImageQuality>,
     response_format: Option<ImageResponseFormat>,
@@ -378,7 +383,7 @@ impl std::fmt::Debug for ImageEditRequestBuilder {
                 &self.mask.as_ref().map(|d| format!("<{} bytes>", d.len())),
             )
             .field("mask_filename", &self.mask_filename)
-            .field("n", &self.n)
+            .field("count", &self.count)
             .field("size", &self.size)
             .field("quality", &self.quality)
             .field("response_format", &self.response_format)
@@ -414,8 +419,8 @@ impl ImageEditRequestBuilder {
     }
 
     /// Set the number of images to generate (1-10).
-    pub fn n(mut self, n: u32) -> Self {
-        self.n = Some(n);
+    pub fn count(mut self, count: u32) -> Self {
+        self.count = Some(count);
         self
     }
 
@@ -443,7 +448,7 @@ impl ImageEditRequestBuilder {
         let model = self
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
-        if model.is_empty() {
+        if model.trim().is_empty() {
             return Err(FoundryError::Builder("model cannot be empty".into()));
         }
 
@@ -457,7 +462,7 @@ impl ImageEditRequestBuilder {
         let image_filename = self
             .image_filename
             .ok_or_else(|| FoundryError::Builder("image filename is required".into()))?;
-        if image_filename.is_empty() {
+        if image_filename.trim().is_empty() {
             return Err(FoundryError::Builder(
                 "image filename cannot be empty".into(),
             ));
@@ -466,13 +471,15 @@ impl ImageEditRequestBuilder {
         let prompt = self
             .prompt
             .ok_or_else(|| FoundryError::Builder("prompt is required".into()))?;
-        if prompt.is_empty() {
+        if prompt.trim().is_empty() {
             return Err(FoundryError::Builder("prompt cannot be empty".into()));
         }
 
-        if let Some(n) = self.n {
-            if !(1..=10).contains(&n) {
-                return Err(FoundryError::Builder("n must be between 1 and 10".into()));
+        if let Some(count) = self.count {
+            if !(1..=10).contains(&count) {
+                return Err(FoundryError::Builder(
+                    "count must be between 1 and 10".into(),
+                ));
             }
         }
 
@@ -483,16 +490,20 @@ impl ImageEditRequestBuilder {
             prompt,
             mask: self.mask,
             mask_filename: self.mask_filename,
-            n: self.n,
+            count: self.count,
             size: self.size,
             quality: self.quality,
             response_format: self.response_format,
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model`, `image`, `image_filename`, or `prompt` is not set,
+    /// or if `count` is out of range. Use [`try_build`](Self::try_build) for
+    /// fallible construction.
     pub fn build(self) -> ImageEditRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -607,7 +618,7 @@ pub async fn edit(
     let prompt = request.prompt.clone();
     let mask_data = request.mask.clone();
     let mask_filename = request.mask_filename.clone();
-    let n = request.n;
+    let n = request.count;
     let size = request.size;
     let quality = request.quality;
     let response_format = request.response_format;
@@ -674,7 +685,7 @@ mod tests {
 
         assert_eq!(request.model, "dall-e-3");
         assert_eq!(request.prompt, "A sunset");
-        assert!(request.n.is_none());
+        assert!(request.count.is_none());
         assert!(request.size.is_none());
         assert!(request.quality.is_none());
         assert!(request.response_format.is_none());
@@ -686,14 +697,14 @@ mod tests {
         let request = ImageGenerationRequest::builder()
             .model("dall-e-3")
             .prompt("A sunset")
-            .n(2)
+            .count(2)
             .size(ImageSize::S1024x1024)
             .quality(ImageQuality::Hd)
             .response_format(ImageResponseFormat::Url)
             .output_format(ImageOutputFormat::Png)
             .build();
 
-        assert_eq!(request.n, Some(2));
+        assert_eq!(request.count, Some(2));
         assert_eq!(request.size, Some(ImageSize::S1024x1024));
         assert_eq!(request.quality, Some(ImageQuality::Hd));
         assert_eq!(request.response_format, Some(ImageResponseFormat::Url));
@@ -804,7 +815,7 @@ mod tests {
         let request = ImageGenerationRequest::builder()
             .model("dall-e-3")
             .prompt("A sunset")
-            .n(2)
+            .count(2)
             .size(ImageSize::S1024x1024)
             .quality(ImageQuality::Hd)
             .response_format(ImageResponseFormat::B64Json)
@@ -855,25 +866,25 @@ mod tests {
         let zero = ImageGenerationRequest::builder()
             .model("dall-e-3")
             .prompt("test")
-            .n(0)
+            .count(0)
             .try_build();
         assert!(zero.is_err());
         assert!(zero
             .unwrap_err()
             .to_string()
-            .contains("n must be between 1 and 10"));
+            .contains("count must be between 1 and 10"));
 
         let eleven = ImageGenerationRequest::builder()
             .model("dall-e-3")
             .prompt("test")
-            .n(11)
+            .count(11)
             .try_build();
         assert!(eleven.is_err());
 
         let valid = ImageGenerationRequest::builder()
             .model("dall-e-3")
             .prompt("test")
-            .n(5)
+            .count(5)
             .try_build();
         assert!(valid.is_ok());
     }
@@ -1010,7 +1021,7 @@ mod tests {
         assert_eq!(request.prompt, "Add a rainbow");
         assert!(request.mask.is_none());
         assert!(request.mask_filename.is_none());
-        assert!(request.n.is_none());
+        assert!(request.count.is_none());
     }
 
     #[test]
@@ -1020,13 +1031,13 @@ mod tests {
             .image(vec![1, 2, 3], "input.png")
             .prompt("Edit")
             .mask(vec![4, 5, 6], "mask.png")
-            .n(2)
+            .count(2)
             .size(ImageSize::S512x512)
             .build();
 
         assert_eq!(request.mask, Some(vec![4, 5, 6]));
         assert_eq!(request.mask_filename, Some("mask.png".into()));
-        assert_eq!(request.n, Some(2));
+        assert_eq!(request.count, Some(2));
         assert_eq!(request.size, Some(ImageSize::S512x512));
     }
 
@@ -1247,5 +1258,100 @@ mod tests {
         assert!(debug.contains("ImageEditRequestBuilder"));
         assert!(debug.contains("<1024 bytes>"));
         assert!(!debug.contains("[0, 0, 0"));
+    }
+
+    #[test]
+    fn test_generation_rejects_whitespace_only_model() {
+        let result = ImageGenerationRequest::builder()
+            .model("  ")
+            .prompt("A cat")
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("model cannot be empty"));
+    }
+
+    #[test]
+    fn test_generation_rejects_whitespace_only_prompt() {
+        let result = ImageGenerationRequest::builder()
+            .model("dall-e-3")
+            .prompt("  ")
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("prompt cannot be empty"));
+    }
+
+    #[test]
+    fn test_edit_rejects_whitespace_only_model() {
+        let result = ImageEditRequest::builder()
+            .model("  ")
+            .image(vec![1u8], "test.png")
+            .prompt("A cat")
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("model cannot be empty"));
+    }
+
+    #[test]
+    fn test_edit_rejects_whitespace_only_image_filename() {
+        let result = ImageEditRequest::builder()
+            .model("dall-e-2")
+            .image(vec![1u8], "  ")
+            .prompt("A cat")
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("image filename cannot be empty"));
+    }
+
+    #[test]
+    fn test_edit_rejects_whitespace_only_prompt() {
+        let result = ImageEditRequest::builder()
+            .model("dall-e-2")
+            .image(vec![1u8], "test.png")
+            .prompt("  ")
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("prompt cannot be empty"));
+    }
+
+    #[test]
+    fn test_image_generation_count_serializes_as_n() {
+        let req = ImageGenerationRequest::builder()
+            .model("dall-e-3")
+            .prompt("a cat")
+            .count(2)
+            .build();
+        assert_eq!(req.count, Some(2));
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["n"], 2, "field must serialize as 'n' per API spec");
+        assert!(
+            json.get("count").is_none(),
+            "Rust field 'count' must not appear in JSON"
+        );
+    }
+
+    #[test]
+    fn test_image_edit_count_field() {
+        let req = ImageEditRequest::builder()
+            .model("dall-e-2")
+            .image(vec![1u8], "test.png")
+            .prompt("edit")
+            .count(3)
+            .build();
+        assert_eq!(req.count, Some(3));
     }
 }

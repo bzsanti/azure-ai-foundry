@@ -208,20 +208,35 @@ impl AgentCreateRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model` is not set, or if `temperature` or `top_p` is out of
+    /// range. Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> AgentCreateRequest {
         self.try_build().expect("builder validation failed")
     }
 }
 
+/// The type of tool available to an agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolType {
+    /// The code interpreter built-in tool.
+    CodeInterpreter,
+    /// The file search built-in tool.
+    FileSearch,
+    /// A user-defined function.
+    Function,
+}
+
 /// A tool that can be used by an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
-    /// The type of tool (e.g., "code_interpreter", "file_search", "function").
+    /// The type of tool.
     #[serde(rename = "type")]
-    pub tool_type: String,
+    pub tool_type: ToolType,
 
     /// Function definition (only for function tools).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -232,7 +247,7 @@ impl Tool {
     /// Create a code interpreter tool.
     pub fn code_interpreter() -> Self {
         Self {
-            tool_type: "code_interpreter".into(),
+            tool_type: ToolType::CodeInterpreter,
             function: None,
         }
     }
@@ -240,7 +255,7 @@ impl Tool {
     /// Create a file search tool.
     pub fn file_search() -> Self {
         Self {
-            tool_type: "file_search".into(),
+            tool_type: ToolType::FileSearch,
             function: None,
         }
     }
@@ -248,7 +263,7 @@ impl Tool {
     /// Create a function tool with the given definition.
     pub fn function(definition: FunctionDefinition) -> Self {
         Self {
-            tool_type: "function".into(),
+            tool_type: ToolType::Function,
             function: Some(definition),
         }
     }
@@ -388,8 +403,23 @@ impl AgentUpdateRequestBuilder {
 
     /// Build the request, validating any provided parameters.
     ///
-    /// All fields are optional. An empty update (no fields set) is allowed.
+    /// At least one field must be set. An empty update (all fields `None`)
+    /// is rejected with a [`FoundryError::Validation`] error.
     pub fn try_build(self) -> FoundryResult<AgentUpdateRequest> {
+        if self.model.is_none()
+            && self.name.is_none()
+            && self.instructions.is_none()
+            && self.description.is_none()
+            && self.tools.is_none()
+            && self.metadata.is_none()
+            && self.temperature.is_none()
+            && self.top_p.is_none()
+        {
+            return Err(FoundryError::validation(
+                "at least one field must be set for an agent update",
+            ));
+        }
+
         if let Some(temp) = self.temperature {
             if !(0.0..=2.0).contains(&temp) {
                 return Err(FoundryError::Builder(
@@ -418,9 +448,12 @@ impl AgentUpdateRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if parameter values are out of range.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if no fields are set, or if `temperature` or `top_p` is out of range.
+    /// Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> AgentUpdateRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -1074,10 +1107,13 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_update_accepts_empty() {
-        let request = AgentUpdateRequest::builder().try_build();
-
-        assert!(request.is_ok());
+    fn test_agent_update_rejects_empty() {
+        let result = AgentUpdateRequest::builder().try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("at least one field"));
     }
 
     #[tokio::test]
@@ -1188,6 +1224,38 @@ mod tests {
         assert_eq!(agent.tools.as_ref().unwrap().len(), 2);
     }
 
+    // --- M3 R2: ToolType enum ---
+
+    #[test]
+    fn test_tool_type_enum_code_interpreter() {
+        let tool = Tool::code_interpreter();
+        assert_eq!(tool.tool_type, ToolType::CodeInterpreter);
+    }
+
+    #[test]
+    fn test_tool_type_enum_file_search() {
+        let tool = Tool::file_search();
+        assert_eq!(tool.tool_type, ToolType::FileSearch);
+    }
+
+    #[test]
+    fn test_tool_type_enum_function() {
+        let func = FunctionDefinition {
+            name: "test".into(),
+            description: None,
+            parameters: None,
+        };
+        let tool = Tool::function(func);
+        assert_eq!(tool.tool_type, ToolType::Function);
+    }
+
+    #[test]
+    fn test_tool_type_deserialization() {
+        let json = serde_json::json!({"type": "code_interpreter"});
+        let tool: Tool = serde_json::from_value(json).unwrap();
+        assert_eq!(tool.tool_type, ToolType::CodeInterpreter);
+    }
+
     // --- Quality: update() 404 error path ---
 
     #[tokio::test]
@@ -1235,5 +1303,18 @@ mod tests {
             "unexpected error message: {}",
             err
         );
+    }
+
+    #[test]
+    fn test_agent_update_all_none_returns_validation_error() {
+        let result = AgentUpdateRequest::builder().try_build();
+        assert!(result.is_err(), "all-None update must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, FoundryError::Validation { .. }),
+            "expected Validation variant, got: {:?}",
+            err
+        );
+        assert!(err.to_string().contains("at least one field"));
     }
 }
