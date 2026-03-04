@@ -182,7 +182,7 @@ impl RetryPolicy {
     ///
     /// # Errors
     ///
-    /// Returns an error if:
+    /// Returns [`FoundryError::Validation`] if:
     /// - `max_retries` exceeds [`Self::MAX_ALLOWED_RETRIES`] (10)
     /// - `initial_backoff` exceeds [`MAX_BACKOFF`] (60 seconds)
     ///
@@ -197,14 +197,14 @@ impl RetryPolicy {
     /// ```
     pub fn new(max_retries: u32, initial_backoff: Duration) -> FoundryResult<Self> {
         if max_retries > Self::MAX_ALLOWED_RETRIES {
-            return Err(FoundryError::Builder(format!(
+            return Err(FoundryError::validation(format!(
                 "max_retries must be <= {}, got {}",
                 Self::MAX_ALLOWED_RETRIES,
                 max_retries
             )));
         }
         if initial_backoff > MAX_BACKOFF {
-            return Err(FoundryError::Builder(format!(
+            return Err(FoundryError::validation(format!(
                 "initial_backoff must be <= {:?}, got {:?}",
                 MAX_BACKOFF, initial_backoff
             )));
@@ -791,10 +791,13 @@ impl FoundryClient {
         let sanitized = Self::sanitize_error_message(msg);
 
         if sanitized.len() > Self::MAX_ERROR_MESSAGE_LEN {
-            format!(
-                "{}... (truncated)",
-                &sanitized[..Self::MAX_ERROR_MESSAGE_LEN]
-            )
+            // Find the largest valid UTF-8 char boundary <= MAX_ERROR_MESSAGE_LEN.
+            // Walk backwards from the target offset until we land on a boundary.
+            let mut boundary = Self::MAX_ERROR_MESSAGE_LEN;
+            while !sanitized.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            format!("{}... (truncated)", &sanitized[..boundary])
         } else {
             sanitized
         }
@@ -1744,6 +1747,26 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("initial_backoff"));
+    }
+
+    #[test]
+    fn test_retry_policy_new_too_many_retries_returns_validation_error() {
+        let result = RetryPolicy::new(11, Duration::from_millis(100));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            FoundryError::Validation { .. } => {}
+            other => panic!("expected Validation, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_retry_policy_new_backoff_too_large_returns_validation_error() {
+        let result = RetryPolicy::new(3, Duration::from_secs(120));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            FoundryError::Validation { .. } => {}
+            other => panic!("expected Validation, got: {:?}", other),
+        }
     }
 
     #[tokio::test]
@@ -2917,5 +2940,34 @@ mod tests {
     #[test]
     fn validate_resource_id_rejects_null_bytes() {
         assert!(FoundryClient::validate_resource_id("id\0evil").is_err());
+    }
+
+    // --- truncate_message tests ---
+
+    #[test]
+    fn test_truncate_message_utf8_boundary() {
+        // Build a string where a 3-byte UTF-8 sequence (euro sign €, 0xE2 0x82 0xAC)
+        // straddles the MAX_ERROR_MESSAGE_LEN byte boundary (1000).
+        let base = "a".repeat(999);
+        let msg = format!("{}\u{20AC}extra", base); // euro sign at bytes 999..1002
+        let result = FoundryClient::truncate_message(&msg);
+        assert!(result.ends_with("... (truncated)"));
+        let text_part = result.trim_end_matches("... (truncated)");
+        assert!(text_part.len() <= FoundryClient::MAX_ERROR_MESSAGE_LEN);
+    }
+
+    #[test]
+    fn test_truncate_message_exactly_at_boundary() {
+        let msg = "x".repeat(FoundryClient::MAX_ERROR_MESSAGE_LEN);
+        let result = FoundryClient::truncate_message(&msg);
+        assert!(!result.ends_with("... (truncated)"));
+        assert_eq!(result.len(), FoundryClient::MAX_ERROR_MESSAGE_LEN);
+    }
+
+    #[test]
+    fn test_truncate_message_one_over_boundary() {
+        let msg = "x".repeat(FoundryClient::MAX_ERROR_MESSAGE_LEN + 1);
+        let result = FoundryClient::truncate_message(&msg);
+        assert!(result.ends_with("... (truncated)"));
     }
 }

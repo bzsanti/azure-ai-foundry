@@ -116,6 +116,8 @@ pub struct EmbeddingResponse {
 /// A single embedding in the response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EmbeddingData {
+    /// The object type, always `"embedding"`.
+    pub object: String,
     /// The zero-based index of this embedding in the response batch.
     pub index: u32,
     /// The embedding vector as a list of floating-point numbers.
@@ -879,5 +881,14 @@ mod tests {
         let debug = format!("{:?}", builder);
         assert!(debug.contains("EmbeddingRequestBuilder"));
         assert!(debug.contains("text-embedding-ada-002"));
+    }
+
+    #[test]
+    fn test_embedding_data_deserializes_object_field() {
+        let json = r#"{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}"#;
+        let data: EmbeddingData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.object, "embedding");
+        assert_eq!(data.index, 0);
+        assert_eq!(data.embedding.len(), 3);
     }
 }

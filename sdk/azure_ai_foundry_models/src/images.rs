@@ -316,14 +316,14 @@ impl ImageGenerationRequestBuilder {
 pub struct ImageEditRequest {
     /// The model to use for editing.
     pub model: String,
-    /// The image to edit as raw bytes.
-    pub image: Vec<u8>,
+    /// The image to edit. Stored as `bytes::Bytes` for O(1) cloning (reference-counted).
+    pub image: bytes::Bytes,
     /// The filename of the image.
     pub image_filename: String,
     /// The text prompt describing the desired edit.
     pub prompt: String,
-    /// An optional mask image indicating which areas to edit.
-    pub mask: Option<Vec<u8>>,
+    /// An optional mask image. Stored as `bytes::Bytes` for O(1) cloning (reference-counted).
+    pub mask: Option<bytes::Bytes>,
     /// The filename of the mask image.
     pub mask_filename: Option<String>,
     /// The number of images to generate (1-10).
@@ -357,10 +357,10 @@ impl ImageEditRequest {
 /// Builder for [`ImageEditRequest`].
 pub struct ImageEditRequestBuilder {
     model: Option<String>,
-    image: Option<Vec<u8>>,
+    image: Option<bytes::Bytes>,
     image_filename: Option<String>,
     prompt: Option<String>,
-    mask: Option<Vec<u8>>,
+    mask: Option<bytes::Bytes>,
     mask_filename: Option<String>,
     count: Option<u32>,
     size: Option<ImageSize>,
@@ -399,8 +399,8 @@ impl ImageEditRequestBuilder {
     }
 
     /// Set the image data and filename.
-    pub fn image(mut self, data: Vec<u8>, filename: impl Into<String>) -> Self {
-        self.image = Some(data);
+    pub fn image(mut self, data: impl Into<bytes::Bytes>, filename: impl Into<String>) -> Self {
+        self.image = Some(data.into());
         self.image_filename = Some(filename.into());
         self
     }
@@ -412,8 +412,8 @@ impl ImageEditRequestBuilder {
     }
 
     /// Set the mask image data and filename.
-    pub fn mask(mut self, data: Vec<u8>, filename: impl Into<String>) -> Self {
-        self.mask = Some(data);
+    pub fn mask(mut self, data: impl Into<bytes::Bytes>, filename: impl Into<String>) -> Self {
+        self.mask = Some(data.into());
         self.mask_filename = Some(filename.into());
         self
     }
@@ -625,16 +625,24 @@ pub async fn edit(
 
     let response = client
         .post_multipart("/openai/v1/images/edits", move || {
-            let image_part = reqwest::multipart::Part::bytes(image_data.clone())
-                .file_name(image_filename.clone());
+            let img_len = image_data.len() as u64;
+            let image_part = reqwest::multipart::Part::stream_with_length(
+                reqwest::Body::from(image_data.clone()),
+                img_len,
+            )
+            .file_name(image_filename.clone());
             let mut form = reqwest::multipart::Form::new()
                 .part("image", image_part)
                 .text("model", model.clone())
                 .text("prompt", prompt.clone());
 
             if let Some(ref mask) = mask_data {
-                let mask_part = reqwest::multipart::Part::bytes(mask.clone())
-                    .file_name(mask_filename.clone().unwrap_or_else(|| "mask.png".into()));
+                let mask_len = mask.len() as u64;
+                let mask_part = reqwest::multipart::Part::stream_with_length(
+                    reqwest::Body::from(mask.clone()),
+                    mask_len,
+                )
+                .file_name(mask_filename.clone().unwrap_or_else(|| "mask.png".into()));
                 form = form.part("mask", mask_part);
             }
 
@@ -1035,7 +1043,7 @@ mod tests {
             .size(ImageSize::S512x512)
             .build();
 
-        assert_eq!(request.mask, Some(vec![4, 5, 6]));
+        assert_eq!(request.mask, Some(bytes::Bytes::from(vec![4u8, 5, 6])));
         assert_eq!(request.mask_filename, Some("mask.png".into()));
         assert_eq!(request.count, Some(2));
         assert_eq!(request.size, Some(ImageSize::S512x512));
@@ -1353,5 +1361,44 @@ mod tests {
             .count(3)
             .build();
         assert_eq!(req.count, Some(3));
+    }
+
+    // --- ImageEditRequest bytes::Bytes migration tests ---
+
+    #[test]
+    fn test_image_edit_request_image_is_bytes() {
+        let img: bytes::Bytes = bytes::Bytes::from(vec![1u8, 2, 3]);
+        let request = ImageEditRequest::builder()
+            .model("dall-e-2")
+            .image(img.clone(), "photo.png")
+            .prompt("Add a hat")
+            .build();
+        // O(1) clone — bytes::Bytes is reference-counted
+        let _clone = request.image.clone();
+        assert_eq!(request.image.len(), 3);
+    }
+
+    #[test]
+    fn test_image_edit_request_mask_is_bytes() {
+        let img = bytes::Bytes::from(vec![0u8; 10]);
+        let mask = bytes::Bytes::from(vec![255u8; 10]);
+        let request = ImageEditRequest::builder()
+            .model("dall-e-2")
+            .image(img, "photo.png")
+            .mask(mask, "mask.png")
+            .prompt("Replace sky")
+            .build();
+        assert_eq!(request.mask.as_ref().unwrap().len(), 10);
+    }
+
+    #[test]
+    fn test_image_edit_builder_accepts_vec_u8_via_into() {
+        let img: Vec<u8> = vec![1, 2, 3];
+        let request = ImageEditRequest::builder()
+            .model("dall-e-2")
+            .image(img, "photo.png")
+            .prompt("test")
+            .build();
+        assert_eq!(request.image.len(), 3);
     }
 }

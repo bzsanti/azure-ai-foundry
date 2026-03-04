@@ -81,6 +81,21 @@ impl std::fmt::Display for FilePurpose {
     }
 }
 
+/// Processing status of a file.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStatus {
+    /// File has been uploaded but not yet processed.
+    Uploaded,
+    /// File has been successfully processed and is ready for use.
+    Processed,
+    /// File processing encountered an error. See `status_details` for more information.
+    Error,
+    /// An unknown status returned by the API (forward-compatibility).
+    #[serde(other)]
+    Unknown,
+}
+
 /// A file object stored in the service.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileObject {
@@ -103,7 +118,7 @@ pub struct FileObject {
     pub purpose: FilePurpose,
 
     /// Processing status of the file.
-    pub status: Option<String>,
+    pub status: Option<FileStatus>,
 
     /// Details about the processing status.
     pub status_details: Option<String>,
@@ -118,7 +133,28 @@ pub struct FileList {
     /// List of files.
     pub data: Vec<FileObject>,
 
-    /// Whether there are more files to fetch.
+    /// Whether there are more files beyond this page.
+    ///
+    /// When `true`, additional files exist that were not returned in this response.
+    /// Use the `id` of the last file in `data` as the `after` cursor parameter in
+    /// a subsequent `list` call to retrieve the next page.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use azure_ai_foundry_core::client::FoundryClient;
+    /// # use azure_ai_foundry_agents::file;
+    /// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
+    /// let page = file::list(client).await?;
+    /// if page.has_more {
+    ///     if let Some(last) = page.data.last() {
+    ///         println!("Next page starts after file: {}", last.id);
+    ///         // Pass last.id as the `after` parameter in the next list() call
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub has_more: bool,
 }
 
@@ -409,7 +445,7 @@ mod tests {
         assert_eq!(file.created_at, TEST_TIMESTAMP);
         assert_eq!(file.filename, "data.jsonl");
         assert_eq!(file.purpose, FilePurpose::Assistants);
-        assert_eq!(file.status, Some("processed".into()));
+        assert_eq!(file.status, Some(FileStatus::Processed));
         assert_eq!(file.status_details, Some("ready".into()));
     }
 
@@ -803,5 +839,66 @@ mod tests {
                 purpose
             );
         }
+    }
+
+    // --- FileStatus enum tests ---
+
+    #[test]
+    fn test_file_status_deserializes_uploaded() {
+        let json = r#"{"status": "uploaded"}"#;
+        #[derive(serde::Deserialize)]
+        struct W {
+            status: FileStatus,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.status, FileStatus::Uploaded);
+    }
+
+    #[test]
+    fn test_file_status_deserializes_processed() {
+        let json = r#"{"status": "processed"}"#;
+        #[derive(serde::Deserialize)]
+        struct W {
+            status: FileStatus,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.status, FileStatus::Processed);
+    }
+
+    #[test]
+    fn test_file_status_deserializes_error() {
+        let json = r#"{"status": "error"}"#;
+        #[derive(serde::Deserialize)]
+        struct W {
+            status: FileStatus,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.status, FileStatus::Error);
+    }
+
+    #[test]
+    fn test_file_status_deserializes_unknown_variant() {
+        let json = r#"{"status": "pending_review"}"#;
+        #[derive(serde::Deserialize)]
+        struct W {
+            status: FileStatus,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.status, FileStatus::Unknown);
+    }
+
+    #[test]
+    fn test_file_object_status_is_typed() {
+        let json = r#"{
+            "id": "file-123",
+            "object": "file",
+            "bytes": 1024,
+            "created_at": 1700000000,
+            "filename": "data.jsonl",
+            "purpose": "assistants",
+            "status": "uploaded"
+        }"#;
+        let obj: FileObject = serde_json::from_str(json).unwrap();
+        assert_eq!(obj.status, Some(FileStatus::Uploaded));
     }
 }

@@ -139,7 +139,7 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-03-03)
+## Session Status (2026-03-04)
 
 **v0.1.0 Status:** RELEASED
 **v0.2.0 Status:** RELEASED
@@ -169,10 +169,8 @@ Published to crates.io:
 - 13 quality fixes via TDD cycles
 
 **v0.7.0 Status:** IN PROGRESS (branch `feature/0.7.0`)
-- Quality refactor rounds 1-3: all milestones complete
+- Quality refactor rounds 1-4: all milestones complete
 - Version bumped to 0.7.0 across all crates
-- Quality review round 4: 12 new findings identified, TDD plan in `.claude/plan.md`
-- Pending: Execute round 4 milestones (M1-M12, see plan)
 - Pending: Update CHANGELOG.md, create PR, merge to main
 
 **v0.7.0 Highlights (completed):**
@@ -208,8 +206,21 @@ Published to crates.io:
   - Display for FilePurpose and AudioResponseFormat
   - Doc lifetime note on fetch_fresh_token_with_options
   - Replaced unreachable!() with explicit error in execute_with_retry
+- Round 4 (M1-M12): 11 findings resolved (M3 false positive)
+  - Fixed UTF-8 boundary panic in `truncate_message` (Critical)
+  - Query params percent-encoding in tools crate (vision + document_intelligence)
+  - `previous_response_id` empty/whitespace validation
+  - `ImageEditRequest` `Vec<u8>` → `bytes::Bytes` migration (O(1) clone for retries)
+  - `FileObject.status` → `FileStatus` typed enum with `#[serde(other)]`
+  - `ResponseOutput.output_type` → `ResponseOutputType` typed enum
+  - `ResponseContent.content_type` → `ResponseContentType` typed enum
+  - `poll_until_complete` infinite-poll warning doc
+  - `EmbeddingData` added `object` field for API parity
+  - `RetryPolicy::new` error variant `Builder` → `Validation`
+  - `Role` enum added `Hash` derive
+  - `FileList.has_more` pagination cursor documentation with example
 
 **Test Summary:**
-- 676 tests passing (149 agents + 214 models + 145 core + 61 tools + 107 doc-tests)
+- 705 tests passing (154 agents + 228 models + 150 core + 65 tools + 108 doc-tests)
 - All clippy checks passing (0 warnings)
 - All formatting checks passing

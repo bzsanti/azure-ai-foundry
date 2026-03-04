@@ -175,15 +175,18 @@ impl DocumentAnalysisRequest {
         let mut params = DOCUMENT_INTELLIGENCE_API_VERSION.to_string();
 
         if let Some(ref pages) = self.pages {
-            params.push_str(&format!("&pages={pages}"));
+            params.push_str(&format!("&pages={}", crate::encode_query_value(pages)));
         }
         if let Some(ref locale) = self.locale {
-            params.push_str(&format!("&locale={locale}"));
+            params.push_str(&format!("&locale={}", crate::encode_query_value(locale)));
         }
         if let Some(ref features) = self.features {
             if !features.is_empty() {
                 let features_str: Vec<&str> = features.iter().map(|f| f.as_str()).collect();
-                params.push_str(&format!("&features={}", features_str.join(",")));
+                params.push_str(&format!(
+                    "&features={}",
+                    crate::encode_query_value(&features_str.join(","))
+                ));
             }
         }
 
@@ -1532,5 +1535,28 @@ mod tests {
             "Expected Validation error, got: {:?}",
             err
         );
+    }
+
+    #[test]
+    fn test_query_string_encodes_pages_special_chars() {
+        let req = DocumentAnalysisRequest::builder()
+            .model_id("prebuilt-read")
+            .url_source("https://example.com/doc.pdf")
+            .pages("1 2")
+            .build();
+        let qs = req.query_string();
+        assert!(qs.contains("pages=1+2"), "got: {qs}");
+        assert!(!qs.contains("pages=1 2"), "unencoded space found");
+    }
+
+    #[test]
+    fn test_query_string_encodes_locale_special_chars() {
+        let req = DocumentAnalysisRequest::builder()
+            .model_id("prebuilt-read")
+            .url_source("https://example.com/doc.pdf")
+            .locale("en-US (formal)")
+            .build();
+        let qs = req.query_string();
+        assert!(qs.contains("locale=en-US+%28formal%29"), "got: {qs}");
     }
 }

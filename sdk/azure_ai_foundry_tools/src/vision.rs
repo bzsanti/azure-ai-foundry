@@ -151,16 +151,16 @@ impl ImageAnalysisRequest {
         );
 
         if let Some(ref lang) = self.language {
-            params.push_str(&format!("&language={lang}"));
+            params.push_str(&format!("&language={}", crate::encode_query_value(lang)));
         }
         if let Some(ref mv) = self.model_version {
-            params.push_str(&format!("&model-version={mv}"));
+            params.push_str(&format!("&model-version={}", crate::encode_query_value(mv)));
         }
         if let Some(ref ratios) = self.smartcrops_aspect_ratios {
             let ratios_str: Vec<String> = ratios.iter().map(|r| r.to_string()).collect();
             params.push_str(&format!(
                 "&smartcrops-aspect-ratios={}",
-                ratios_str.join(",")
+                crate::encode_query_value(&ratios_str.join(","))
             ));
         }
         if let Some(gnc) = self.gender_neutral_caption {
@@ -944,5 +944,28 @@ mod tests {
 
         let _ = analyze(&client, &request).await;
         assert!(logs_contain("foundry::vision::analyze"));
+    }
+
+    #[test]
+    fn test_query_string_encodes_language_special_chars() {
+        let req = ImageAnalysisRequest::builder()
+            .url("https://example.com/img.jpg")
+            .features(vec![VisualFeature::Caption])
+            .language("en US")
+            .build();
+        let qs = req.query_string();
+        assert!(qs.contains("language=en+US"), "got: {qs}");
+        assert!(!qs.contains("language=en US"), "unencoded space found");
+    }
+
+    #[test]
+    fn test_query_string_encodes_model_version_special_chars() {
+        let req = ImageAnalysisRequest::builder()
+            .url("https://example.com/img.jpg")
+            .features(vec![VisualFeature::Caption])
+            .model_version("2024-01+preview")
+            .build();
+        let qs = req.query_string();
+        assert!(qs.contains("model-version=2024-01%2Bpreview"), "got: {qs}");
     }
 }

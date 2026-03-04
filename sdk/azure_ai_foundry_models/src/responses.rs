@@ -61,8 +61,8 @@ use crate::chat::Role;
 
 /// Content type identifier for text output blocks in a Response.
 ///
-/// Used to identify [`ResponseContent`] blocks that contain text output.
-/// Match against `ResponseContent::content_type` to extract text.
+/// Retained for backward compatibility. Prefer matching against
+/// [`ResponseContentType::OutputText`] for exhaustive pattern matching.
 pub const OUTPUT_TEXT_TYPE: &str = "output_text";
 
 // ---------------------------------------------------------------------------
@@ -315,6 +315,14 @@ impl CreateResponseRequestBuilder {
             }
         }
 
+        if let Some(ref prev_id) = self.previous_response_id {
+            if prev_id.trim().is_empty() {
+                return Err(FoundryError::Builder(
+                    "previous_response_id cannot be empty or whitespace".into(),
+                ));
+            }
+        }
+
         Ok(CreateResponseRequest {
             model,
             input,
@@ -388,7 +396,7 @@ impl Response {
         for output in &self.output {
             if let Some(ref content) = output.content {
                 for c in content {
-                    if c.content_type == OUTPUT_TEXT_TYPE {
+                    if c.content_type == ResponseContentType::OutputText {
                         if let Some(ref text) = c.text {
                             return Some(text.as_str());
                         }
@@ -400,6 +408,17 @@ impl Response {
     }
 }
 
+/// The type of a response output item.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseOutputType {
+    /// A message output containing text or other content blocks.
+    Message,
+    /// An unknown output type returned by the API (forward-compatibility).
+    #[serde(other)]
+    Other,
+}
+
 /// An output item in a response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResponseOutput {
@@ -407,19 +426,30 @@ pub struct ResponseOutput {
     pub id: String,
     /// The type of output item.
     #[serde(rename = "type")]
-    pub output_type: String,
+    pub output_type: ResponseOutputType,
     /// The role of the output (e.g., `Role::Assistant`).
     pub role: Option<crate::chat::Role>,
     /// The content blocks of the output.
     pub content: Option<Vec<ResponseContent>>,
 }
 
+/// The type of a content block within a response output item.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseContentType {
+    /// Plain text output.
+    OutputText,
+    /// An unknown content type returned by the API (forward-compatibility).
+    #[serde(other)]
+    Other,
+}
+
 /// A content block within a response output.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResponseContent {
-    /// The type of content (e.g., "output_text").
+    /// The type of content.
     #[serde(rename = "type")]
-    pub content_type: String,
+    pub content_type: ResponseContentType,
     /// The text content, if this is a text block.
     pub text: Option<String>,
 }
@@ -844,12 +874,12 @@ mod tests {
         assert_eq!(response.model, "gpt-4o-2024-08-06");
         assert_eq!(response.output.len(), 1);
         assert_eq!(response.output[0].id, "msg_001");
-        assert_eq!(response.output[0].output_type, "message");
+        assert_eq!(response.output[0].output_type, ResponseOutputType::Message);
         assert_eq!(response.output[0].role, Some(crate::chat::Role::Assistant));
 
         let content = response.output[0].content.as_ref().unwrap();
         assert_eq!(content.len(), 1);
-        assert_eq!(content[0].content_type, "output_text");
+        assert_eq!(content[0].content_type, ResponseContentType::OutputText);
         assert_eq!(content[0].text, Some("Hello, how can I help?".into()));
 
         let usage = response.usage.unwrap();
@@ -1196,6 +1226,68 @@ mod tests {
         assert_eq!(OUTPUT_TEXT_TYPE, "output_text");
     }
 
+    // --- ResponseOutputType / ResponseContentType enum tests ---
+
+    #[test]
+    fn test_response_output_type_deserializes_message() {
+        let json = r#"{"type": "message"}"#;
+        #[derive(Deserialize)]
+        struct W {
+            #[serde(rename = "type")]
+            t: ResponseOutputType,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.t, ResponseOutputType::Message);
+    }
+
+    #[test]
+    fn test_response_output_type_deserializes_unknown() {
+        let json = r#"{"type": "function_call"}"#;
+        #[derive(Deserialize)]
+        struct W {
+            #[serde(rename = "type")]
+            t: ResponseOutputType,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.t, ResponseOutputType::Other);
+    }
+
+    #[test]
+    fn test_response_content_type_deserializes_output_text() {
+        let json = r#"{"type": "output_text", "text": "hello"}"#;
+        let c: ResponseContent = serde_json::from_str(json).unwrap();
+        assert_eq!(c.content_type, ResponseContentType::OutputText);
+    }
+
+    #[test]
+    fn test_response_content_type_deserializes_unknown() {
+        let json = r#"{"type": "refusal"}"#;
+        let c: ResponseContent = serde_json::from_str(json).unwrap();
+        assert_eq!(c.content_type, ResponseContentType::Other);
+    }
+
+    #[test]
+    fn test_output_text_uses_typed_content_type() {
+        let response_json = r#"{
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1700000000,
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [{
+                "id": "out_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "hello from the model"
+                }]
+            }]
+        }"#;
+        let response: Response = serde_json::from_str(response_json).unwrap();
+        assert_eq!(response.output_text(), Some("hello from the model"));
+    }
+
     // --- Tracing span tests ---
 
     fn sample_response_json_for_tracing() -> serde_json::Value {
@@ -1377,5 +1469,48 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("model cannot be empty"));
+    }
+
+    // --- previous_response_id validation tests ---
+
+    #[test]
+    fn test_try_build_rejects_empty_previous_response_id() {
+        let result = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("hello")
+            .previous_response_id("")
+            .try_build();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("previous_response_id"), "got: {err}");
+    }
+
+    #[test]
+    fn test_try_build_rejects_whitespace_previous_response_id() {
+        let result = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("hello")
+            .previous_response_id("   ")
+            .try_build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_build_accepts_valid_previous_response_id() {
+        let result = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("hello")
+            .previous_response_id("resp_abc123")
+            .try_build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_try_build_without_previous_response_id_is_ok() {
+        let result = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("hello")
+            .try_build();
+        assert!(result.is_ok());
     }
 }

@@ -295,7 +295,7 @@ impl Message {
 }
 
 /// The role of a message in a conversation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
@@ -1985,5 +1985,16 @@ data: [DONE]
         let debug = format!("{:?}", builder);
         assert!(debug.contains("ChatCompletionRequestBuilder"));
         assert!(debug.contains("gpt-4o"));
+    }
+
+    #[test]
+    fn test_role_can_be_used_as_hash_map_key() {
+        use std::collections::HashMap;
+        let mut counts: HashMap<Role, u32> = HashMap::new();
+        *counts.entry(Role::User).or_insert(0) += 1;
+        *counts.entry(Role::Assistant).or_insert(0) += 1;
+        *counts.entry(Role::User).or_insert(0) += 1;
+        assert_eq!(counts[&Role::User], 2);
+        assert_eq!(counts[&Role::Assistant], 1);
     }
 }

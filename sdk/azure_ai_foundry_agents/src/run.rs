@@ -689,6 +689,13 @@ pub async fn create_thread_and_run(
 /// * `poll_interval` - How often to check the run status.
 /// * `max_attempts` - Maximum number of poll attempts, or `None` for unlimited.
 ///
+/// # Warning
+///
+/// When `max_attempts` is `None`, this function polls indefinitely. If the run
+/// never reaches a terminal state (e.g., due to a service outage or an agent bug),
+/// the caller will block forever. Always pass a finite `max_attempts` in production
+/// code, or wrap the call with [`tokio::time::timeout`] for a wall-clock deadline.
+///
 /// # Example
 ///
 /// ```rust,no_run
