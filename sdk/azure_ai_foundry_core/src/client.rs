@@ -182,7 +182,7 @@ impl RetryPolicy {
     ///
     /// # Errors
     ///
-    /// Returns an error if:
+    /// Returns [`FoundryError::Validation`] if:
     /// - `max_retries` exceeds [`Self::MAX_ALLOWED_RETRIES`] (10)
     /// - `initial_backoff` exceeds [`MAX_BACKOFF`] (60 seconds)
     ///
@@ -197,14 +197,14 @@ impl RetryPolicy {
     /// ```
     pub fn new(max_retries: u32, initial_backoff: Duration) -> FoundryResult<Self> {
         if max_retries > Self::MAX_ALLOWED_RETRIES {
-            return Err(FoundryError::Builder(format!(
+            return Err(FoundryError::validation(format!(
                 "max_retries must be <= {}, got {}",
                 Self::MAX_ALLOWED_RETRIES,
                 max_retries
             )));
         }
         if initial_backoff > MAX_BACKOFF {
-            return Err(FoundryError::Builder(format!(
+            return Err(FoundryError::validation(format!(
                 "initial_backoff must be <= {:?}, got {:?}",
                 MAX_BACKOFF, initial_backoff
             )));
@@ -228,6 +228,11 @@ pub struct FoundryClient {
     http: HttpClient,
     endpoint: Url,
     credential: FoundryCredential,
+    /// The API version sent as an `api-version` HTTP header.
+    ///
+    /// For OpenAI-compatible endpoints (models crate), this is sent as a header.
+    /// For Agent Service and Document Intelligence endpoints, callers append it
+    /// as a query parameter (`?api-version=...`) themselves.
     api_version: String,
     retry_policy: RetryPolicy,
     streaming_timeout: Duration,
@@ -291,6 +296,59 @@ impl FoundryClient {
             .map_err(|e| FoundryError::invalid_endpoint_with_source("failed to construct URL", e))
     }
 
+    /// Internal retry loop shared by all HTTP methods.
+    ///
+    /// Handles credential resolution, retry/backoff, tracing span updates,
+    /// and error classification. The `build_and_send` closure constructs and
+    /// sends the request for each attempt, receiving the authorization header
+    /// value as its argument.
+    async fn execute_with_retry<F, Fut>(
+        &self,
+        build_and_send: F,
+    ) -> FoundryResult<reqwest::Response>
+    where
+        F: Fn(String) -> Fut,
+        Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
+    {
+        for attempt in 0..=self.retry_policy.max_retries {
+            let span = tracing::Span::current();
+            span.record("attempt", attempt);
+
+            // Resolve credential on each attempt to handle token expiration during retries.
+            // The internal cache ensures this is O(1) when the token is still valid.
+            let auth = self.credential.resolve().await?;
+
+            let response = build_and_send(auth).await?;
+
+            let status = response.status().as_u16();
+            span.record("status_code", status);
+
+            if response.status().is_success() {
+                return Ok(response);
+            }
+
+            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
+                return Self::check_response(response).await;
+            }
+
+            tracing::warn!(
+                status = status,
+                attempt = attempt,
+                "retriable error, will retry"
+            );
+
+            let backoff = extract_retry_after_delay(response.headers())
+                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
+            tokio::time::sleep(backoff).await;
+        }
+
+        Err(FoundryError::Api {
+            code: "InternalError".into(),
+            message: "retry loop exhausted without returning — this is a bug, please report it"
+                .into(),
+        })
+    }
+
     /// Send a GET request to the API with automatic retry on transient errors.
     ///
     /// Automatically adds authentication headers and API version.
@@ -318,52 +376,16 @@ impl FoundryClient {
     )]
     pub async fn get(&self, path: &str) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
+        tracing::debug!("sending GET request");
 
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
-
-            // Resolve credential on each attempt to handle token expiration during retries.
-            // The internal cache ensures this is O(1) when the token is still valid.
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending GET request");
-
-            let response = self
-                .http
+        self.execute_with_retry(|auth| {
+            self.http
                 .get(url.clone())
-                .header("Authorization", &auth)
+                .header("Authorization", auth)
                 .header("api-version", &self.api_version)
                 .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            // Success - return response
-            if response.status().is_success() {
-                return Ok(response);
-            }
-
-            // Non-retriable error or last attempt - return error
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Self::check_response(response).await;
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            // Respect Retry-After header if present; otherwise use exponential backoff
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        // This should never be reached due to the loop logic
-        unreachable!("retry loop should return before reaching here")
+        })
+        .await
     }
 
     /// Send a POST request with a JSON body to the API with automatic retry.
@@ -398,52 +420,17 @@ impl FoundryClient {
         body: &T,
     ) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
+        tracing::debug!("sending POST request");
 
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
-
-            // Resolve credential on each attempt to handle token expiration during retries.
-            // The internal cache ensures this is O(1) when the token is still valid.
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending POST request");
-
-            let response = self
-                .http
+        self.execute_with_retry(|auth| {
+            self.http
                 .post(url.clone())
-                .header("Authorization", &auth)
+                .header("Authorization", auth)
                 .header("api-version", &self.api_version)
                 .json(body)
                 .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            // Success - return response
-            if response.status().is_success() {
-                return Ok(response);
-            }
-
-            // Non-retriable error or last attempt - return error
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Self::check_response(response).await;
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            // Respect Retry-After header if present; otherwise use exponential backoff
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        unreachable!("retry loop should return before reaching here")
+        })
+        .await
     }
 
     /// Send a DELETE request to the API with automatic retry on transient errors.
@@ -473,50 +460,16 @@ impl FoundryClient {
     )]
     pub async fn delete(&self, path: &str) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
+        tracing::debug!("sending DELETE request");
 
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
-
-            // Resolve credential on each attempt to handle token expiration during retries.
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending DELETE request");
-
-            let response = self
-                .http
+        self.execute_with_retry(|auth| {
+            self.http
                 .delete(url.clone())
-                .header("Authorization", &auth)
+                .header("Authorization", auth)
                 .header("api-version", &self.api_version)
                 .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            // Success - return response
-            if response.status().is_success() {
-                return Ok(response);
-            }
-
-            // Non-retriable error or last attempt - return error
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Self::check_response(response).await;
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            // Respect Retry-After header if present; otherwise use exponential backoff
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        unreachable!("retry loop should return before reaching here")
+        })
+        .await
     }
 
     /// Send a POST request for streaming responses.
@@ -553,57 +506,19 @@ impl FoundryClient {
         body: &T,
     ) -> FoundryResult<reqwest::Response> {
         let url = self.url(path)?;
+        let streaming_timeout = self.streaming_timeout;
+        tracing::debug!("sending POST request for streaming");
 
-        // Retry loop for pre-stream errors only (connection errors and retriable status codes)
-        // Once we receive a success response, the stream starts and we cannot retry.
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
-
-            // Resolve credential on each attempt to handle token expiration during retries.
-            // The internal cache ensures this is O(1) when the token is still valid.
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending POST request for streaming");
-
-            // Use streaming-specific timeout (longer than default for streaming responses)
-            let response = self
-                .http
+        self.execute_with_retry(|auth| {
+            self.http
                 .post(url.clone())
-                .header("Authorization", &auth)
+                .header("Authorization", auth)
                 .header("api-version", &self.api_version)
-                .timeout(self.streaming_timeout)
+                .timeout(streaming_timeout)
                 .json(body)
                 .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            // Success - return response for streaming (no more retries after this point)
-            if response.status().is_success() {
-                tracing::debug!("stream started");
-                return Ok(response);
-            }
-
-            // Non-retriable error or last attempt - return error
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Self::check_response(response).await;
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            // Respect Retry-After header if present; otherwise use exponential backoff
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        unreachable!("retry loop should return before reaching here")
+        })
+        .await
     }
 
     /// Send a POST request with a multipart form body to the API with automatic retry.
@@ -641,48 +556,18 @@ impl FoundryClient {
         F: Fn() -> reqwest::multipart::Form,
     {
         let url = self.url(path)?;
+        tracing::debug!("sending POST multipart request");
 
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
-
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending POST multipart request");
-
+        self.execute_with_retry(|auth| {
             let form = form_builder();
-            let response = self
-                .http
+            self.http
                 .post(url.clone())
-                .header("Authorization", &auth)
+                .header("Authorization", auth)
                 .header("api-version", &self.api_version)
                 .multipart(form)
                 .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            if response.status().is_success() {
-                return Ok(response);
-            }
-
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Self::check_response(response).await;
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        unreachable!("retry loop should return before reaching here")
+        })
+        .await
     }
 
     /// Send a GET request and return the response body as raw bytes.
@@ -712,49 +597,19 @@ impl FoundryClient {
     )]
     pub async fn get_bytes(&self, path: &str) -> FoundryResult<bytes::Bytes> {
         let url = self.url(path)?;
+        tracing::debug!("sending GET request for bytes");
 
-        for attempt in 0..=self.retry_policy.max_retries {
-            let span = tracing::Span::current();
-            span.record("attempt", attempt);
+        let response = self
+            .execute_with_retry(|auth| {
+                self.http
+                    .get(url.clone())
+                    .header("Authorization", auth)
+                    .header("api-version", &self.api_version)
+                    .send()
+            })
+            .await?;
 
-            let auth = self.credential.resolve().await?;
-
-            tracing::debug!("sending GET request for bytes");
-
-            let response = self
-                .http
-                .get(url.clone())
-                .header("Authorization", &auth)
-                .header("api-version", &self.api_version)
-                .send()
-                .await?;
-
-            let status = response.status().as_u16();
-            span.record("status_code", status);
-
-            if response.status().is_success() {
-                let data = response.bytes().await?;
-                return Ok(data);
-            }
-
-            if !is_retriable_status(status) || attempt == self.retry_policy.max_retries {
-                return Err(Self::check_response(response)
-                    .await
-                    .expect_err("check_response must return Err for non-success status"));
-            }
-
-            tracing::warn!(
-                status = status,
-                attempt = attempt,
-                "retriable error, will retry"
-            );
-
-            let backoff = extract_retry_after_delay(response.headers())
-                .unwrap_or_else(|| compute_backoff(attempt, self.retry_policy.initial_backoff));
-            tokio::time::sleep(backoff).await;
-        }
-
-        unreachable!("retry loop should return before reaching here")
+        Ok(response.bytes().await?)
     }
 
     /// Maximum length for error messages to prevent sensitive data leaks.
@@ -768,151 +623,164 @@ impl FoundryClient {
         let mut result = msg.to_string();
 
         // Sanitize Bearer tokens (format: "Bearer <token>")
-        // Use offset to avoid infinite loops
-        let mut search_start = 0;
-        while search_start < result.len() {
-            if let Some(relative_pos) = result[search_start..].find("Bearer ") {
-                let bearer_pos = search_start + relative_pos;
-                let token_start = bearer_pos + 7; // "Bearer " is 7 chars
-
-                if token_start < result.len() {
-                    // Skip if already redacted
-                    if result[token_start..].starts_with("[REDACTED]") {
-                        search_start = token_start + 10;
-                        continue;
-                    }
-
-                    // Find the end of the token (next whitespace/delimiter or end of string)
-                    let token_end = result[token_start..]
-                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
-                        .map(|pos| token_start + pos)
-                        .unwrap_or(result.len());
-
-                    if token_end > token_start {
-                        result.replace_range(token_start..token_end, "[REDACTED]");
-                        search_start = token_start + 10; // "[REDACTED]" is 10 chars
-                    } else {
-                        search_start = token_start;
-                    }
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
+        Self::redact_pattern_case_sensitive(&mut result, "Bearer ", true);
 
         // Sanitize sk- style API keys (OpenAI format)
-        search_start = 0;
-        while search_start < result.len() {
-            if let Some(relative_pos) = result[search_start..].find("sk-") {
-                let sk_pos = search_start + relative_pos;
-                let key_end = result[sk_pos..]
-                    .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
-                    .map(|pos| sk_pos + pos)
-                    .unwrap_or(result.len());
-
-                if key_end > sk_pos + 3 {
-                    result.replace_range(sk_pos..key_end, "[REDACTED]");
-                    search_start = sk_pos + 10; // "[REDACTED]" is 10 chars
-                } else {
-                    search_start = sk_pos + 3;
-                }
-            } else {
-                break;
-            }
-        }
+        Self::redact_pattern_case_sensitive(&mut result, "sk-", false);
 
         // Sanitize JWT tokens (Entra ID tokens starting with "eyJ")
-        // JWTs always start with "eyJ" because the header {"alg":...} encodes to this prefix
-        search_start = 0;
+        Self::redact_pattern_case_sensitive(&mut result, "eyJ", false);
+
+        // Sanitize header-style patterns (case-insensitive): "api-key:" and "ocp-apim-subscription-key:"
+        // Compute lowercase once and find all replacement ranges, then apply in reverse order.
+        Self::redact_header_value_case_insensitive(&mut result, "api-key:");
+        Self::redact_header_value_case_insensitive(&mut result, "ocp-apim-subscription-key:");
+
+        result
+    }
+
+    /// Redact values after a case-sensitive pattern (e.g., `"Bearer "`, `"sk-"`, `"eyJ"`).
+    ///
+    /// If `skip_prefix` is true, the pattern prefix is kept and only the value after it is redacted.
+    /// If false, the pattern and value are both replaced with `[REDACTED]`.
+    fn redact_pattern_case_sensitive(result: &mut String, pattern: &str, skip_prefix: bool) {
+        let redacted = "[REDACTED]";
+        let mut search_start = 0;
         while search_start < result.len() {
-            if let Some(relative_pos) = result[search_start..].find("eyJ") {
-                let jwt_pos = search_start + relative_pos;
-                // JWT tokens contain alphanumeric chars, dots, underscores, and hyphens (base64url + separators)
-                let jwt_end = result[jwt_pos..]
+            if let Some(relative_pos) = result[search_start..].find(pattern) {
+                let match_pos = search_start + relative_pos;
+                let value_start = if skip_prefix {
+                    match_pos + pattern.len()
+                } else {
+                    match_pos
+                };
+
+                if value_start >= result.len() {
+                    break;
+                }
+
+                // Skip if already redacted
+                if result[value_start..].starts_with(redacted) {
+                    search_start = value_start + redacted.len();
+                    continue;
+                }
+
+                let value_end = result[value_start..]
                     .find(|c: char| {
                         c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == ')'
                     })
-                    .map(|pos| jwt_pos + pos)
+                    .map(|pos| value_start + pos)
                     .unwrap_or(result.len());
 
-                if jwt_end > jwt_pos + 3 {
-                    result.replace_range(jwt_pos..jwt_end, "[REDACTED]");
-                    search_start = jwt_pos + 10;
+                if value_end > value_start {
+                    result.replace_range(value_start..value_end, redacted);
+                    search_start = value_start + redacted.len();
                 } else {
-                    search_start = jwt_pos + 3;
+                    search_start = value_start + 1;
                 }
             } else {
                 break;
             }
         }
+    }
 
-        // Sanitize api-key: pattern (Azure style)
-        search_start = 0;
+    /// Redact the value after a case-insensitive header pattern (e.g., `"api-key:"`).
+    ///
+    /// Performs case-insensitive searching directly on the original string using
+    /// char-by-char lowercase comparison, so all byte indices remain valid for the
+    /// original string. This avoids the pitfall of computing indices on a
+    /// `to_lowercase()` copy (whose byte length can differ from the original for
+    /// characters like Turkish İ).
+    ///
+    /// Collects all replacement ranges first, then applies them in reverse order
+    /// so earlier indices remain valid.
+    fn redact_header_value_case_insensitive(result: &mut String, header_lower: &str) {
+        let redacted = "[REDACTED]";
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        let mut search_start = 0;
+
         while search_start < result.len() {
-            // Case-insensitive search for "api-key:"
-            let lower = result[search_start..].to_lowercase();
-            if let Some(relative_pos) = lower.find("api-key:") {
-                let key_pos = search_start + relative_pos + 8; // "api-key:" is 8 chars
-                                                               // Skip any whitespace after the colon
+            if let Some(match_byte_pos) =
+                Self::find_case_insensitive(&result[search_start..], header_lower)
+            {
+                let key_pos = search_start + match_byte_pos + header_lower.len();
+
+                if key_pos >= result.len() {
+                    break;
+                }
+
+                // Skip whitespace after the colon (indices are on `result` directly)
                 let value_start = result[key_pos..]
                     .find(|c: char| !c.is_whitespace())
                     .map(|pos| key_pos + pos)
                     .unwrap_or(result.len());
 
-                if value_start < result.len() {
-                    let value_end = result[value_start..]
-                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
-                        .map(|pos| value_start + pos)
-                        .unwrap_or(result.len());
-
-                    if value_end > value_start {
-                        result.replace_range(value_start..value_end, "[REDACTED]");
-                        search_start = value_start + 10;
-                    } else {
-                        search_start = value_start;
-                    }
-                } else {
+                if value_start >= result.len() {
                     break;
                 }
-            } else {
-                break;
-            }
-        }
 
-        // Sanitize Ocp-Apim-Subscription-Key: pattern (Azure API Management)
-        search_start = 0;
-        while search_start < result.len() {
-            let lower = result[search_start..].to_lowercase();
-            if let Some(relative_pos) = lower.find("ocp-apim-subscription-key:") {
-                let key_pos = search_start + relative_pos + 26; // header is 26 chars
-                let value_start = result[key_pos..]
-                    .find(|c: char| !c.is_whitespace())
-                    .map(|pos| key_pos + pos)
+                let value_end = result[value_start..]
+                    .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
+                    .map(|pos| value_start + pos)
                     .unwrap_or(result.len());
 
-                if value_start < result.len() {
-                    let value_end = result[value_start..]
-                        .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
-                        .map(|pos| value_start + pos)
-                        .unwrap_or(result.len());
-
-                    if value_end > value_start {
-                        result.replace_range(value_start..value_end, "[REDACTED]");
-                        search_start = value_start + 10;
-                    } else {
-                        search_start = value_start;
-                    }
+                if value_end > value_start {
+                    ranges.push((value_start, value_end));
+                    search_start = value_end;
                 } else {
-                    break;
+                    search_start = value_start + 1;
                 }
             } else {
                 break;
             }
         }
 
-        result
+        // Apply replacements in reverse order to preserve earlier indices
+        for (start, end) in ranges.into_iter().rev() {
+            result.replace_range(start..end, redacted);
+        }
+    }
+
+    /// Case-insensitive substring search that returns the byte offset in `haystack`
+    /// where the match starts. `needle` must be lowercase ASCII.
+    ///
+    /// Works by iterating over `haystack` char-by-char, lowercasing each character
+    /// and comparing against `needle`. All returned byte offsets refer to `haystack`.
+    fn find_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+        if needle.is_empty() {
+            return Some(0);
+        }
+
+        let needle_bytes = needle.as_bytes();
+
+        haystack
+            .char_indices()
+            .map(|(byte_idx, _)| byte_idx)
+            .find(|&byte_idx| Self::matches_case_insensitive_at(haystack, byte_idx, needle_bytes))
+    }
+
+    /// Check if `haystack` starting at `start` matches `needle_lower` (lowercase ASCII bytes)
+    /// using case-insensitive comparison.
+    fn matches_case_insensitive_at(haystack: &str, start: usize, needle_lower: &[u8]) -> bool {
+        let hay = &haystack[start..];
+        let mut needle_pos = 0;
+
+        for ch in hay.chars() {
+            // Compare each lowercased character of haystack against needle bytes.
+            // needle is always lowercase ASCII, so each needle char is exactly 1 byte.
+            for lower_ch in ch.to_lowercase() {
+                if needle_pos >= needle_lower.len() {
+                    return true;
+                }
+                // Since needle is ASCII, each byte is one char
+                if lower_ch as u32 > 127 || lower_ch as u8 != needle_lower[needle_pos] {
+                    return false;
+                }
+                needle_pos += 1;
+            }
+        }
+
+        needle_pos >= needle_lower.len()
     }
 
     /// Truncate a message if it exceeds the maximum length.
@@ -923,10 +791,13 @@ impl FoundryClient {
         let sanitized = Self::sanitize_error_message(msg);
 
         if sanitized.len() > Self::MAX_ERROR_MESSAGE_LEN {
-            format!(
-                "{}... (truncated)",
-                &sanitized[..Self::MAX_ERROR_MESSAGE_LEN]
-            )
+            // Find the largest valid UTF-8 char boundary <= MAX_ERROR_MESSAGE_LEN.
+            // Walk backwards from the target offset until we land on a boundary.
+            let mut boundary = Self::MAX_ERROR_MESSAGE_LEN;
+            while !sanitized.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            format!("{}... (truncated)", &sanitized[..boundary])
         } else {
             sanitized
         }
@@ -962,6 +833,34 @@ impl FoundryClient {
             Err(FoundryError::http(status, Self::truncate_message(&body)))
         }
     }
+
+    /// Validate that a resource ID is safe for URL interpolation.
+    ///
+    /// Rejects IDs containing path traversal sequences, URL-unsafe characters,
+    /// or other values that could lead to path injection attacks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FoundryError::Validation`] if the ID is empty or contains
+    /// forbidden characters (`/`, `\`, `?`, `#`, `&`, `\0`, space, `..`).
+    pub fn validate_resource_id(id: &str) -> FoundryResult<()> {
+        if id.is_empty() {
+            return Err(FoundryError::validation("resource ID must not be empty"));
+        }
+        if id.contains("..") {
+            return Err(FoundryError::validation_field(
+                "id",
+                "resource ID must not contain path traversal sequences (..)",
+            ));
+        }
+        if id.contains(['/', '\\', '?', '#', '&', '\0', ' ']) {
+            return Err(FoundryError::validation_field(
+                "id",
+                "resource ID contains forbidden characters (/, \\, ?, #, &, NUL, or space)",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl FoundryClientBuilder {
@@ -990,6 +889,23 @@ impl FoundryClientBuilder {
     /// Set the API version.
     ///
     /// Defaults to [`DEFAULT_API_VERSION`] (`2025-01-01-preview`).
+    ///
+    /// # How the API version is transmitted
+    ///
+    /// The mechanism differs by endpoint type:
+    ///
+    /// - **OpenAI-compatible endpoints** (`azure_ai_foundry_models`): the version is sent
+    ///   as an `api-version` HTTP **header** on every request.
+    /// - **Agent Service and Document Intelligence endpoints** (`azure_ai_foundry_agents`,
+    ///   `azure_ai_foundry_tools`): the caller is responsible for appending the version
+    ///   as a query parameter (`?api-version=...`) to each URL, because those services
+    ///   do not accept the header form.
+    ///
+    /// # Note
+    ///
+    /// This setting controls the API version for model inference endpoints only.
+    /// The Agents Service endpoints use a separately hardcoded version string
+    /// (`azure_ai_foundry_agents`). See that crate's documentation for details.
     pub fn api_version(mut self, version: impl Into<String>) -> Self {
         self.api_version = Some(version.into());
         self
@@ -1833,6 +1749,26 @@ mod tests {
         assert!(err.to_string().contains("initial_backoff"));
     }
 
+    #[test]
+    fn test_retry_policy_new_too_many_retries_returns_validation_error() {
+        let result = RetryPolicy::new(11, Duration::from_millis(100));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            FoundryError::Validation { .. } => {}
+            other => panic!("expected Validation, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_retry_policy_new_backoff_too_large_returns_validation_error() {
+        let result = RetryPolicy::new(3, Duration::from_secs(120));
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            FoundryError::Validation { .. } => {}
+            other => panic!("expected Validation, got: {:?}", other),
+        }
+    }
+
     #[tokio::test]
     async fn get_retries_on_503_with_backoff() {
         use std::sync::atomic::{AtomicU32, Ordering};
@@ -2316,6 +2252,125 @@ mod tests {
         );
     }
 
+    #[test]
+    fn sanitize_multiple_api_key_headers() {
+        let msg = "api-key: secret1 and api-key: secret2 in headers";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("secret1"),
+            "First api-key value should be redacted"
+        );
+        assert!(
+            !result.contains("secret2"),
+            "Second api-key value should be redacted"
+        );
+        assert_eq!(
+            result.matches("[REDACTED]").count(),
+            2,
+            "Should have two redaction markers for two api-key headers"
+        );
+    }
+
+    #[test]
+    fn sanitize_mixed_case_ocp_apim() {
+        let msg = "OCP-APIM-SUBSCRIPTION-KEY: UPPER123 and ocp-apim-subscription-key: lower456";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("UPPER123"),
+            "Uppercase key value should be redacted"
+        );
+        assert!(
+            !result.contains("lower456"),
+            "Lowercase key value should be redacted"
+        );
+    }
+
+    // --- UTF-8 boundary safety tests for sanitize_error_message ---
+
+    #[test]
+    fn sanitize_error_message_with_multibyte_before_api_key() {
+        // "café" contains a 2-byte UTF-8 codepoint (é = 0xC3 0xA9).
+        // Without the fix this panics on a UTF-8 boundary when applying
+        // replace_range with indices computed on the lowercase copy.
+        let msg = "café api-key: supersecret123 failed";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("supersecret123"),
+            "secret should be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("[REDACTED]"),
+            "should contain redaction marker, got: {result}"
+        );
+    }
+
+    #[test]
+    fn sanitize_error_message_with_emoji_before_api_key() {
+        // Emoji are 4-byte UTF-8 codepoints.
+        let msg = "error 🚀 api-key: topsecret456 endpoint";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("topsecret456"),
+            "secret should be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("[REDACTED]"),
+            "should contain redaction marker, got: {result}"
+        );
+    }
+
+    #[test]
+    fn sanitize_error_message_multibyte_in_key_value_itself() {
+        // Multi-byte characters in the value region must not cause boundary issues.
+        let msg = "api-key: sécrêt123 was rejected";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("sécrêt123"),
+            "multi-byte secret should be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("[REDACTED]"),
+            "should contain redaction marker, got: {result}"
+        );
+    }
+
+    #[test]
+    fn sanitize_error_message_preserves_case_with_multibyte() {
+        // The fix must preserve original case for non-redacted portions.
+        let msg = "CAFÉ api-key: secret123 FAILED";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            result.contains("CAFÉ"),
+            "original case should be preserved, got: {result}"
+        );
+        assert!(
+            result.contains("FAILED"),
+            "original case should be preserved, got: {result}"
+        );
+        assert!(
+            !result.contains("secret123"),
+            "secret should be redacted, got: {result}"
+        );
+    }
+
+    #[test]
+    fn sanitize_error_message_turkish_i_with_multibyte_value() {
+        // Turkish İ (U+0130, 2 bytes) lowercases to "i̇" (3 bytes: U+0069 + U+0307).
+        // When a multi-byte char follows "api-key:" immediately, the +1 byte offset
+        // shift causes key_pos to land inside the multi-byte char in the original,
+        // triggering a panic on str slicing at a non-char-boundary.
+        let msg = "İapi-key:ésecret";
+        let result = FoundryClient::sanitize_error_message(msg);
+        assert!(
+            !result.contains("ésecret"),
+            "secret should be redacted, got: {result}"
+        );
+        assert!(
+            result.contains("[REDACTED]"),
+            "should contain redaction marker, got: {result}"
+        );
+    }
+
     // --- Tracing Instrumentation Tests ---
 
     #[tokio::test]
@@ -2793,5 +2848,126 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("file not found"));
+    }
+
+    #[tokio::test]
+    async fn test_get_bytes_non_success_returns_error_safely() {
+        // Verify get_bytes handles non-success responses without panicking.
+        // Covers edge case where check_response might return Ok for a non-success status.
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/files/file-bad/content"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad request body"))
+            .mount(&server)
+            .await;
+
+        let client = FoundryClient::builder()
+            .endpoint(server.uri())
+            .credential(FoundryCredential::api_key("test-api-key"))
+            .build()
+            .expect("should build");
+
+        let result = client.get_bytes("/files/file-bad/content").await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("bad request body"),
+            "Expected error message to contain 'bad request body', got: {}",
+            err
+        );
+    }
+
+    // --- validate_resource_id tests ---
+
+    #[test]
+    fn validate_resource_id_accepts_valid_azure_ids() {
+        let valid_ids = [
+            "asst_abc123",
+            "thread_xyz789",
+            "run_abc",
+            "file-abc123def",
+            "vs_abc",
+            "msg_123",
+            "step_abc",
+        ];
+        for id in valid_ids {
+            assert!(
+                FoundryClient::validate_resource_id(id).is_ok(),
+                "Expected '{}' to be accepted",
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn validate_resource_id_rejects_path_traversal() {
+        let result = FoundryClient::validate_resource_id("../etc/passwd");
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, FoundryError::Validation { .. }),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+        assert!(err.to_string().contains("path traversal"));
+    }
+
+    #[test]
+    fn validate_resource_id_rejects_slashes() {
+        assert!(FoundryClient::validate_resource_id("foo/bar").is_err());
+        assert!(FoundryClient::validate_resource_id("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn validate_resource_id_rejects_empty() {
+        let result = FoundryClient::validate_resource_id("");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must not be empty"));
+    }
+
+    #[test]
+    fn validate_resource_id_rejects_query_injection() {
+        assert!(FoundryClient::validate_resource_id("id?param=value").is_err());
+        assert!(FoundryClient::validate_resource_id("id#fragment").is_err());
+        assert!(FoundryClient::validate_resource_id("id&other=1").is_err());
+    }
+
+    #[test]
+    fn validate_resource_id_rejects_null_bytes() {
+        assert!(FoundryClient::validate_resource_id("id\0evil").is_err());
+    }
+
+    // --- truncate_message tests ---
+
+    #[test]
+    fn test_truncate_message_utf8_boundary() {
+        // Build a string where a 3-byte UTF-8 sequence (euro sign €, 0xE2 0x82 0xAC)
+        // straddles the MAX_ERROR_MESSAGE_LEN byte boundary (1000).
+        let base = "a".repeat(999);
+        let msg = format!("{}\u{20AC}extra", base); // euro sign at bytes 999..1002
+        let result = FoundryClient::truncate_message(&msg);
+        assert!(result.ends_with("... (truncated)"));
+        let text_part = result.trim_end_matches("... (truncated)");
+        assert!(text_part.len() <= FoundryClient::MAX_ERROR_MESSAGE_LEN);
+    }
+
+    #[test]
+    fn test_truncate_message_exactly_at_boundary() {
+        let msg = "x".repeat(FoundryClient::MAX_ERROR_MESSAGE_LEN);
+        let result = FoundryClient::truncate_message(&msg);
+        assert!(!result.ends_with("... (truncated)"));
+        assert_eq!(result.len(), FoundryClient::MAX_ERROR_MESSAGE_LEN);
+    }
+
+    #[test]
+    fn test_truncate_message_one_over_boundary() {
+        let msg = "x".repeat(FoundryClient::MAX_ERROR_MESSAGE_LEN + 1);
+        let result = FoundryClient::truncate_message(&msg);
+        assert!(result.ends_with("... (truncated)"));
     }
 }

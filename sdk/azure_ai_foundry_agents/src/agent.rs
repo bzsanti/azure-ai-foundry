@@ -21,7 +21,7 @@
 //!     .model("gpt-4o")
 //!     .name("My Assistant")
 //!     .instructions("You are a helpful assistant.")
-//!     .build()?;
+//!     .try_build()?;
 //!
 //! let agent = agent::create(&client, &request).await?;
 //! println!("Created agent: {}", agent.id);
@@ -59,8 +59,7 @@ use crate::models::API_VERSION;
 ///     .model("gpt-4o")
 ///     .name("My Assistant")
 ///     .instructions("You are a helpful assistant.")
-///     .build()
-///     .expect("valid request");
+///     .build();
 /// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentCreateRequest {
@@ -169,7 +168,7 @@ impl AgentCreateRequestBuilder {
 
     /// Build the request, returning an error if required fields are missing
     /// or parameter values are out of range.
-    pub fn build(self) -> FoundryResult<AgentCreateRequest> {
+    pub fn try_build(self) -> FoundryResult<AgentCreateRequest> {
         let model = self
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
@@ -208,14 +207,36 @@ impl AgentCreateRequestBuilder {
             top_p: self.top_p,
         })
     }
+
+    /// Build the request.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `model` is not set, or if `temperature` or `top_p` is out of
+    /// range. Use [`try_build`](Self::try_build) for fallible construction.
+    pub fn build(self) -> AgentCreateRequest {
+        self.try_build().expect("builder validation failed")
+    }
+}
+
+/// The type of tool available to an agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolType {
+    /// The code interpreter built-in tool.
+    CodeInterpreter,
+    /// The file search built-in tool.
+    FileSearch,
+    /// A user-defined function.
+    Function,
 }
 
 /// A tool that can be used by an agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
-    /// The type of tool (e.g., "code_interpreter", "file_search", "function").
+    /// The type of tool.
     #[serde(rename = "type")]
-    pub tool_type: String,
+    pub tool_type: ToolType,
 
     /// Function definition (only for function tools).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -226,7 +247,7 @@ impl Tool {
     /// Create a code interpreter tool.
     pub fn code_interpreter() -> Self {
         Self {
-            tool_type: "code_interpreter".into(),
+            tool_type: ToolType::CodeInterpreter,
             function: None,
         }
     }
@@ -234,7 +255,7 @@ impl Tool {
     /// Create a file search tool.
     pub fn file_search() -> Self {
         Self {
-            tool_type: "file_search".into(),
+            tool_type: ToolType::FileSearch,
             function: None,
         }
     }
@@ -242,7 +263,7 @@ impl Tool {
     /// Create a function tool with the given definition.
     pub fn function(definition: FunctionDefinition) -> Self {
         Self {
-            tool_type: "function".into(),
+            tool_type: ToolType::Function,
             function: Some(definition),
         }
     }
@@ -274,8 +295,7 @@ pub struct FunctionDefinition {
 /// let request = AgentUpdateRequest::builder()
 ///     .name("Updated Agent")
 ///     .instructions("New instructions.")
-///     .build()
-///     .expect("valid request");
+///     .build();
 /// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentUpdateRequest {
@@ -383,8 +403,23 @@ impl AgentUpdateRequestBuilder {
 
     /// Build the request, validating any provided parameters.
     ///
-    /// All fields are optional. An empty update (no fields set) is allowed.
-    pub fn build(self) -> FoundryResult<AgentUpdateRequest> {
+    /// At least one field must be set. An empty update (all fields `None`)
+    /// is rejected with a [`FoundryError::Validation`] error.
+    pub fn try_build(self) -> FoundryResult<AgentUpdateRequest> {
+        if self.model.is_none()
+            && self.name.is_none()
+            && self.instructions.is_none()
+            && self.description.is_none()
+            && self.tools.is_none()
+            && self.metadata.is_none()
+            && self.temperature.is_none()
+            && self.top_p.is_none()
+        {
+            return Err(FoundryError::validation(
+                "at least one field must be set for an agent update",
+            ));
+        }
+
         if let Some(temp) = self.temperature {
             if !(0.0..=2.0).contains(&temp) {
                 return Err(FoundryError::Builder(
@@ -411,6 +446,16 @@ impl AgentUpdateRequestBuilder {
             temperature: self.temperature,
             top_p: self.top_p,
         })
+    }
+
+    /// Build the request.
+    ///
+    /// # Panics
+    ///
+    /// Panics if no fields are set, or if `temperature` or `top_p` is out of range.
+    /// Use [`try_build`](Self::try_build) for fallible construction.
+    pub fn build(self) -> AgentUpdateRequest {
+        self.try_build().expect("builder validation failed")
     }
 }
 
@@ -503,7 +548,7 @@ pub struct AgentDeletionResponse {
 ///     .model("gpt-4o")
 ///     .name("My Assistant")
 ///     .instructions("You are helpful.")
-///     .build()?;
+///     .try_build()?;
 ///
 /// let agent = agent::create(client, &request).await?;
 /// println!("Created agent: {}", agent.id);
@@ -554,7 +599,7 @@ pub async fn create(client: &FoundryClient, request: &AgentCreateRequest) -> Fou
 )]
 pub async fn get(client: &FoundryClient, agent_id: &str) -> FoundryResult<Agent> {
     tracing::debug!("getting agent");
-
+    FoundryClient::validate_resource_id(agent_id)?;
     let path = format!("/assistants/{}?{}", agent_id, API_VERSION);
     let response = client.get(&path).await?;
     let agent = response.json::<Agent>().await?;
@@ -622,7 +667,7 @@ pub async fn delete(
     agent_id: &str,
 ) -> FoundryResult<AgentDeletionResponse> {
     tracing::debug!("deleting agent");
-
+    FoundryClient::validate_resource_id(agent_id)?;
     let path = format!("/assistants/{}?{}", agent_id, API_VERSION);
     let response = client.delete(&path).await?;
     let result = response.json::<AgentDeletionResponse>().await?;
@@ -644,7 +689,7 @@ pub async fn delete(
 /// let request = AgentUpdateRequest::builder()
 ///     .name("Updated Name")
 ///     .instructions("New instructions.")
-///     .build()?;
+///     .try_build()?;
 ///
 /// let agent = agent::update(client, "asst_abc123", &request).await?;
 /// println!("Updated agent: {}", agent.name.unwrap_or_default());
@@ -666,7 +711,7 @@ pub async fn update(
     request: &AgentUpdateRequest,
 ) -> FoundryResult<Agent> {
     tracing::debug!("updating agent");
-
+    FoundryClient::validate_resource_id(agent_id)?;
     let path = format!("/assistants/{}?{}", agent_id, API_VERSION);
     let response = client.post(&path, request).await?;
     let agent = response.json::<Agent>().await?;
@@ -686,10 +731,7 @@ mod tests {
 
     #[test]
     fn test_agent_request_serialization_minimal() {
-        let request = AgentCreateRequest::builder()
-            .model("gpt-4o")
-            .build()
-            .expect("valid request");
+        let request = AgentCreateRequest::builder().model("gpt-4o").build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -712,8 +754,7 @@ mod tests {
             .description("A test agent")
             .temperature(0.7)
             .top_p(0.9)
-            .build()
-            .expect("valid request");
+            .build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -733,8 +774,7 @@ mod tests {
         let request = AgentCreateRequest::builder()
             .model("gpt-4o")
             .tools(vec![Tool::code_interpreter(), Tool::file_search()])
-            .build()
-            .expect("valid request");
+            .build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -748,7 +788,7 @@ mod tests {
 
     #[test]
     fn test_agent_builder_requires_model() {
-        let result = AgentCreateRequest::builder().build();
+        let result = AgentCreateRequest::builder().try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -757,7 +797,7 @@ mod tests {
 
     #[test]
     fn test_agent_builder_rejects_empty_model() {
-        let result = AgentCreateRequest::builder().model("   ").build();
+        let result = AgentCreateRequest::builder().model("   ").try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -769,7 +809,7 @@ mod tests {
         let result = AgentCreateRequest::builder()
             .model("gpt-4o")
             .temperature(3.0)
-            .build();
+            .try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -781,7 +821,7 @@ mod tests {
         let result = AgentCreateRequest::builder()
             .model("gpt-4o")
             .top_p(1.5)
-            .build();
+            .try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -794,7 +834,7 @@ mod tests {
             .model("gpt-4o")
             .temperature(0.0)
             .top_p(1.0)
-            .build();
+            .try_build();
 
         assert!(result.is_ok());
     }
@@ -883,8 +923,7 @@ mod tests {
             .model(TEST_MODEL)
             .name("Test Agent")
             .instructions("You are helpful.")
-            .build()
-            .expect("valid request");
+            .build();
 
         let agent = create(&client, &request).await.expect("should succeed");
 
@@ -1039,10 +1078,7 @@ mod tests {
 
     #[test]
     fn test_agent_update_request_serialization() {
-        let request = AgentUpdateRequest::builder()
-            .name("Updated Agent")
-            .build()
-            .expect("valid request");
+        let request = AgentUpdateRequest::builder().name("Updated Agent").build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -1054,7 +1090,7 @@ mod tests {
 
     #[test]
     fn test_agent_update_validates_temperature() {
-        let result = AgentUpdateRequest::builder().temperature(3.0).build();
+        let result = AgentUpdateRequest::builder().temperature(3.0).try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1063,7 +1099,7 @@ mod tests {
 
     #[test]
     fn test_agent_update_validates_top_p() {
-        let result = AgentUpdateRequest::builder().top_p(1.5).build();
+        let result = AgentUpdateRequest::builder().top_p(1.5).try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1071,10 +1107,13 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_update_accepts_empty() {
-        let request = AgentUpdateRequest::builder().build();
-
-        assert!(request.is_ok());
+    fn test_agent_update_rejects_empty() {
+        let result = AgentUpdateRequest::builder().try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("at least one field"));
     }
 
     #[tokio::test]
@@ -1098,10 +1137,7 @@ mod tests {
 
         let client = setup_mock_client(&server).await;
 
-        let request = AgentUpdateRequest::builder()
-            .name("Updated Agent")
-            .build()
-            .expect("valid request");
+        let request = AgentUpdateRequest::builder().name("Updated Agent").build();
 
         let agent = update(&client, "asst_abc123", &request)
             .await
@@ -1144,8 +1180,7 @@ mod tests {
             .temperature(0.5)
             .top_p(0.8)
             .tools(vec![Tool::code_interpreter()])
-            .build()
-            .expect("valid request");
+            .build();
 
         let agent = update(&client, "asst_full", &request)
             .await
@@ -1180,8 +1215,7 @@ mod tests {
 
         let request = AgentUpdateRequest::builder()
             .tools(vec![Tool::code_interpreter(), Tool::file_search()])
-            .build()
-            .expect("valid request");
+            .build();
 
         let agent = update(&client, "asst_tools", &request)
             .await
@@ -1190,7 +1224,56 @@ mod tests {
         assert_eq!(agent.tools.as_ref().unwrap().len(), 2);
     }
 
+    // --- M3 R2: ToolType enum ---
+
+    #[test]
+    fn test_tool_type_enum_code_interpreter() {
+        let tool = Tool::code_interpreter();
+        assert_eq!(tool.tool_type, ToolType::CodeInterpreter);
+    }
+
+    #[test]
+    fn test_tool_type_enum_file_search() {
+        let tool = Tool::file_search();
+        assert_eq!(tool.tool_type, ToolType::FileSearch);
+    }
+
+    #[test]
+    fn test_tool_type_enum_function() {
+        let func = FunctionDefinition {
+            name: "test".into(),
+            description: None,
+            parameters: None,
+        };
+        let tool = Tool::function(func);
+        assert_eq!(tool.tool_type, ToolType::Function);
+    }
+
+    #[test]
+    fn test_tool_type_deserialization() {
+        let json = serde_json::json!({"type": "code_interpreter"});
+        let tool: Tool = serde_json::from_value(json).unwrap();
+        assert_eq!(tool.tool_type, ToolType::CodeInterpreter);
+    }
+
     // --- Quality: update() 404 error path ---
+
+    #[tokio::test]
+    async fn test_get_agent_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../etc/passwd").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+    }
 
     #[tokio::test]
     async fn test_update_agent_not_found() {
@@ -1209,10 +1292,7 @@ mod tests {
 
         let client = setup_mock_client(&server).await;
 
-        let request = AgentUpdateRequest::builder()
-            .name("New Name")
-            .build()
-            .expect("valid request");
+        let request = AgentUpdateRequest::builder().name("New Name").build();
 
         let result = update(&client, "asst_missing", &request).await;
 
@@ -1223,5 +1303,18 @@ mod tests {
             "unexpected error message: {}",
             err
         );
+    }
+
+    #[test]
+    fn test_agent_update_all_none_returns_validation_error() {
+        let result = AgentUpdateRequest::builder().try_build();
+        assert!(result.is_err(), "all-None update must be rejected");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, FoundryError::Validation { .. }),
+            "expected Validation variant, got: {:?}",
+            err
+        );
+        assert!(err.to_string().contains("at least one field"));
     }
 }

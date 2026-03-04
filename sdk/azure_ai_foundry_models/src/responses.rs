@@ -53,12 +53,17 @@ use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::chat::Role;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Content type string used to identify text output blocks in a Response.
-const OUTPUT_TEXT_TYPE: &str = "output_text";
+/// Content type identifier for text output blocks in a Response.
+///
+/// Retained for backward compatibility. Prefer matching against
+/// [`ResponseContentType::OutputText`] for exhaustive pattern matching.
+pub const OUTPUT_TEXT_TYPE: &str = "output_text";
 
 // ---------------------------------------------------------------------------
 // Input types
@@ -90,8 +95,8 @@ impl Serialize for ResponseInput {
 /// A message in a response input.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResponseMessage {
-    /// The role of the message author (e.g., "user", "assistant", "system").
-    pub role: String,
+    /// The role of the message author.
+    pub role: Role,
     /// The text content of the message.
     ///
     /// # Limitation
@@ -103,27 +108,28 @@ pub struct ResponseMessage {
 }
 
 impl ResponseMessage {
-    /// Create a new message with the given role and content.
-    pub fn new(role: impl Into<String>, content: impl Into<String>) -> Self {
+    /// Create a user message.
+    pub fn user(content: impl Into<String>) -> Self {
         Self {
-            role: role.into(),
+            role: Role::User,
             content: content.into(),
         }
     }
 
-    /// Create a user message.
-    pub fn user(content: impl Into<String>) -> Self {
-        Self::new("user", content)
-    }
-
     /// Create a system message.
     pub fn system(content: impl Into<String>) -> Self {
-        Self::new("system", content)
+        Self {
+            role: Role::System,
+            content: content.into(),
+        }
     }
 
     /// Create an assistant message.
     pub fn assistant(content: impl Into<String>) -> Self {
-        Self::new("assistant", content)
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+        }
     }
 }
 
@@ -163,16 +169,6 @@ pub struct CreateResponseRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,
 
-    /// Whether to stream the response.
-    ///
-    /// # Warning
-    ///
-    /// Streaming is **not supported** by [`create()`]. Setting this field to `true`
-    /// will result in a server-side error or an incomplete response. This field is
-    /// preserved in the API surface for future streaming support.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stream: Option<bool>,
-
     /// The ID of a previous response to continue from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,
@@ -190,13 +186,13 @@ impl CreateResponseRequest {
             frequency_penalty: None,
             presence_penalty: None,
             stop: None,
-            stream: None,
             previous_response_id: None,
         }
     }
 }
 
 /// Builder for [`CreateResponseRequest`].
+#[derive(Debug)]
 pub struct CreateResponseRequestBuilder {
     model: Option<String>,
     input: Option<ResponseInput>,
@@ -206,7 +202,6 @@ pub struct CreateResponseRequestBuilder {
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
     stop: Option<Vec<String>>,
-    stream: Option<bool>,
     previous_response_id: Option<String>,
 }
 
@@ -260,14 +255,11 @@ impl CreateResponseRequestBuilder {
     }
 
     /// Set stop sequences.
-    pub fn stop(mut self, stop: Vec<String>) -> Self {
-        self.stop = Some(stop);
-        self
-    }
-
-    /// Enable or disable streaming.
-    pub fn stream(mut self, stream: bool) -> Self {
-        self.stream = Some(stream);
+    ///
+    /// Accepts any iterable of string-like values, including `Vec<String>`,
+    /// `&[&str]`, arrays, or any iterator yielding `impl Into<String>`.
+    pub fn stop(mut self, stop: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.stop = Some(stop.into_iter().map(Into::into).collect());
         self
     }
 
@@ -283,7 +275,7 @@ impl CreateResponseRequestBuilder {
         let model = self
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
-        if model.is_empty() {
+        if model.trim().is_empty() {
             return Err(FoundryError::Builder("model cannot be empty".into()));
         }
 
@@ -323,6 +315,14 @@ impl CreateResponseRequestBuilder {
             }
         }
 
+        if let Some(ref prev_id) = self.previous_response_id {
+            if prev_id.trim().is_empty() {
+                return Err(FoundryError::Builder(
+                    "previous_response_id cannot be empty or whitespace".into(),
+                ));
+            }
+        }
+
         Ok(CreateResponseRequest {
             model,
             input,
@@ -332,14 +332,17 @@ impl CreateResponseRequestBuilder {
             frequency_penalty: self.frequency_penalty,
             presence_penalty: self.presence_penalty,
             stop: self.stop,
-            stream: self.stream,
             previous_response_id: self.previous_response_id,
         })
     }
 
-    /// Build the request. Panics if required fields are missing.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model` or `input` is not set, or if parameter values
+    /// (`temperature`, `top_p`, `frequency_penalty`, `presence_penalty`) are out
+    /// of range. Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> CreateResponseRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -371,7 +374,7 @@ pub struct Response {
     /// Object type, always "response".
     pub object: String,
     /// Unix timestamp when the response was created.
-    pub created_at: f64,
+    pub created_at: u64,
     /// The status of the response.
     pub status: ResponseStatus,
     /// The model used to generate the response.
@@ -393,7 +396,7 @@ impl Response {
         for output in &self.output {
             if let Some(ref content) = output.content {
                 for c in content {
-                    if c.content_type == OUTPUT_TEXT_TYPE {
+                    if c.content_type == ResponseContentType::OutputText {
                         if let Some(ref text) = c.text {
                             return Some(text.as_str());
                         }
@@ -405,6 +408,17 @@ impl Response {
     }
 }
 
+/// The type of a response output item.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseOutputType {
+    /// A message output containing text or other content blocks.
+    Message,
+    /// An unknown output type returned by the API (forward-compatibility).
+    #[serde(other)]
+    Other,
+}
+
 /// An output item in a response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResponseOutput {
@@ -412,24 +426,40 @@ pub struct ResponseOutput {
     pub id: String,
     /// The type of output item.
     #[serde(rename = "type")]
-    pub output_type: String,
-    /// The role of the output (e.g., "assistant").
-    pub role: Option<String>,
+    pub output_type: ResponseOutputType,
+    /// The role of the output (e.g., `Role::Assistant`).
+    pub role: Option<crate::chat::Role>,
     /// The content blocks of the output.
     pub content: Option<Vec<ResponseContent>>,
+}
+
+/// The type of a content block within a response output item.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponseContentType {
+    /// Plain text output.
+    OutputText,
+    /// An unknown content type returned by the API (forward-compatibility).
+    #[serde(other)]
+    Other,
 }
 
 /// A content block within a response output.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResponseContent {
-    /// The type of content (e.g., "output_text").
+    /// The type of content.
     #[serde(rename = "type")]
-    pub content_type: String,
+    pub content_type: ResponseContentType,
     /// The text content, if this is a text block.
     pub text: Option<String>,
 }
 
 /// Token usage statistics for a response.
+///
+/// This type is intentionally separate from [`azure_ai_foundry_core::models::Usage`]
+/// because the Responses API uses different field names at the wire level:
+/// `input_tokens`/`output_tokens` instead of `prompt_tokens`/`completion_tokens`.
+/// Unifying the two types would require a custom deserializer or breaking field names.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ResponseUsage {
     /// Number of tokens in the input.
@@ -517,6 +547,7 @@ pub async fn create(
 )]
 pub async fn get(client: &FoundryClient, response_id: &str) -> FoundryResult<Response> {
     tracing::debug!("getting response");
+    FoundryClient::validate_resource_id(response_id)?;
 
     let path = format!("/openai/v1/responses/{}", response_id);
     let response = client.get(&path).await?;
@@ -553,6 +584,7 @@ pub async fn delete(
     response_id: &str,
 ) -> FoundryResult<ResponseDeletionResponse> {
     tracing::debug!("deleting response");
+    FoundryClient::validate_resource_id(response_id)?;
 
     let path = format!("/openai/v1/responses/{}", response_id);
     let response = client.delete(&path).await?;
@@ -616,7 +648,6 @@ mod tests {
         assert!(request.frequency_penalty.is_none());
         assert!(request.presence_penalty.is_none());
         assert!(request.stop.is_none());
-        assert!(request.stream.is_none());
         assert!(request.previous_response_id.is_none());
     }
 
@@ -633,8 +664,8 @@ mod tests {
         match &request.input {
             ResponseInput::Messages(msgs) => {
                 assert_eq!(msgs.len(), 2);
-                assert_eq!(msgs[0].role, "system");
-                assert_eq!(msgs[1].role, "user");
+                assert_eq!(msgs[0].role, crate::chat::Role::System);
+                assert_eq!(msgs[1].role, crate::chat::Role::User);
             }
             ResponseInput::Text(_) => panic!("Expected Messages, got Text"),
         }
@@ -650,8 +681,7 @@ mod tests {
             .max_output_tokens(1000)
             .frequency_penalty(0.5)
             .presence_penalty(-0.5)
-            .stop(vec!["END".into()])
-            .stream(false)
+            .stop(["END"])
             .previous_response_id("resp_prev123")
             .build();
 
@@ -660,8 +690,7 @@ mod tests {
         assert_eq!(request.max_output_tokens, Some(1000));
         assert_eq!(request.frequency_penalty, Some(0.5));
         assert_eq!(request.presence_penalty, Some(-0.5));
-        assert_eq!(request.stop, Some(vec!["END".into()]));
-        assert_eq!(request.stream, Some(false));
+        assert_eq!(request.stop, Some(vec!["END".to_string()]));
         assert_eq!(request.previous_response_id, Some("resp_prev123".into()));
     }
 
@@ -693,8 +722,7 @@ mod tests {
             .max_output_tokens(500)
             .frequency_penalty(0.25)
             .presence_penalty(-0.25)
-            .stop(vec!["END".into()])
-            .stream(true)
+            .stop(["END"])
             .previous_response_id("resp_prev")
             .build();
 
@@ -706,7 +734,10 @@ mod tests {
         assert_eq!(json["frequency_penalty"], 0.25);
         assert_eq!(json["presence_penalty"], -0.25);
         assert_eq!(json["stop"], serde_json::json!(["END"]));
-        assert_eq!(json["stream"], true);
+        assert!(
+            json.get("stream").is_none(),
+            "stream field should not exist"
+        );
         assert_eq!(json["previous_response_id"], "resp_prev");
     }
 
@@ -808,7 +839,7 @@ mod tests {
         serde_json::json!({
             "id": "resp_abc123",
             "object": "response",
-            "created_at": 1700000000.0,
+            "created_at": 1700000000,
             "status": "completed",
             "model": "gpt-4o-2024-08-06",
             "output": [{
@@ -838,17 +869,17 @@ mod tests {
 
         assert_eq!(response.id, "resp_abc123");
         assert_eq!(response.object, "response");
-        assert!((response.created_at - 1_700_000_000.0).abs() < f64::EPSILON);
+        assert_eq!(response.created_at, 1_700_000_000u64);
         assert_eq!(response.status, ResponseStatus::Completed);
         assert_eq!(response.model, "gpt-4o-2024-08-06");
         assert_eq!(response.output.len(), 1);
         assert_eq!(response.output[0].id, "msg_001");
-        assert_eq!(response.output[0].output_type, "message");
-        assert_eq!(response.output[0].role, Some("assistant".into()));
+        assert_eq!(response.output[0].output_type, ResponseOutputType::Message);
+        assert_eq!(response.output[0].role, Some(crate::chat::Role::Assistant));
 
         let content = response.output[0].content.as_ref().unwrap();
         assert_eq!(content.len(), 1);
-        assert_eq!(content[0].content_type, "output_text");
+        assert_eq!(content[0].content_type, ResponseContentType::OutputText);
         assert_eq!(content[0].text, Some("Hello, how can I help?".into()));
 
         let usage = response.usage.unwrap();
@@ -867,7 +898,7 @@ mod tests {
         let json = serde_json::json!({
             "id": "resp_xyz",
             "object": "response",
-            "created_at": 1700000000.0,
+            "created_at": 1700000000,
             "status": "completed",
             "model": "gpt-4o",
             "output": []
@@ -879,6 +910,20 @@ mod tests {
         assert!(response.output.is_empty());
         assert!(response.usage.is_none());
         assert!(response.metadata.is_none());
+    }
+
+    #[test]
+    fn response_created_at_is_u64() {
+        let json = serde_json::json!({
+            "id": "resp_ts",
+            "object": "response",
+            "created_at": 1700000001u64,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": []
+        });
+        let response: Response = serde_json::from_value(json).unwrap();
+        assert_eq!(response.created_at, 1_700_000_001u64);
     }
 
     // --- Cycle 4.7: ResponseStatus serde ---
@@ -1125,7 +1170,7 @@ mod tests {
         let json = serde_json::json!({
             "id": "resp_xyz",
             "object": "response",
-            "created_at": 1700000000.0,
+            "created_at": 1700000000,
             "status": "completed",
             "model": "gpt-4o",
             "output": []
@@ -1141,15 +1186,15 @@ mod tests {
     #[test]
     fn test_response_message_constructors() {
         let user = ResponseMessage::user("Hello");
-        assert_eq!(user.role, "user");
+        assert_eq!(user.role, crate::chat::Role::User);
         assert_eq!(user.content, "Hello");
 
         let system = ResponseMessage::system("Be helpful");
-        assert_eq!(system.role, "system");
+        assert_eq!(system.role, crate::chat::Role::System);
         assert_eq!(system.content, "Be helpful");
 
         let assistant = ResponseMessage::assistant("Hi there");
-        assert_eq!(assistant.role, "assistant");
+        assert_eq!(assistant.role, crate::chat::Role::Assistant);
         assert_eq!(assistant.content, "Hi there");
     }
 
@@ -1181,13 +1226,75 @@ mod tests {
         assert_eq!(OUTPUT_TEXT_TYPE, "output_text");
     }
 
+    // --- ResponseOutputType / ResponseContentType enum tests ---
+
+    #[test]
+    fn test_response_output_type_deserializes_message() {
+        let json = r#"{"type": "message"}"#;
+        #[derive(Deserialize)]
+        struct W {
+            #[serde(rename = "type")]
+            t: ResponseOutputType,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.t, ResponseOutputType::Message);
+    }
+
+    #[test]
+    fn test_response_output_type_deserializes_unknown() {
+        let json = r#"{"type": "function_call"}"#;
+        #[derive(Deserialize)]
+        struct W {
+            #[serde(rename = "type")]
+            t: ResponseOutputType,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.t, ResponseOutputType::Other);
+    }
+
+    #[test]
+    fn test_response_content_type_deserializes_output_text() {
+        let json = r#"{"type": "output_text", "text": "hello"}"#;
+        let c: ResponseContent = serde_json::from_str(json).unwrap();
+        assert_eq!(c.content_type, ResponseContentType::OutputText);
+    }
+
+    #[test]
+    fn test_response_content_type_deserializes_unknown() {
+        let json = r#"{"type": "refusal"}"#;
+        let c: ResponseContent = serde_json::from_str(json).unwrap();
+        assert_eq!(c.content_type, ResponseContentType::Other);
+    }
+
+    #[test]
+    fn test_output_text_uses_typed_content_type() {
+        let response_json = r#"{
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1700000000,
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [{
+                "id": "out_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": "hello from the model"
+                }]
+            }]
+        }"#;
+        let response: Response = serde_json::from_str(response_json).unwrap();
+        assert_eq!(response.output_text(), Some("hello from the model"));
+    }
+
     // --- Tracing span tests ---
 
     fn sample_response_json_for_tracing() -> serde_json::Value {
         serde_json::json!({
             "id": "resp_trace",
             "object": "response",
-            "created_at": 1700000000.0,
+            "created_at": 1700000000,
             "status": "completed",
             "model": "gpt-4o",
             "output": []
@@ -1259,5 +1366,151 @@ mod tests {
         let _ = delete(&client, "resp_trace").await;
 
         assert!(logs_contain("foundry::responses::delete"));
+    }
+
+    #[tokio::test]
+    async fn test_get_response_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../etc/passwd").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+    }
+
+    // --- Cycle 6.1: stop() accepts impl IntoIterator ---
+
+    #[test]
+    fn test_stop_accepts_str_slice_responses() {
+        let request = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("Hello")
+            .stop(["stop1", "stop2"])
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["stop"], serde_json::json!(["stop1", "stop2"]));
+    }
+
+    #[test]
+    fn test_stop_accepts_iterator_responses() {
+        let stops = vec!["a".to_string(), "b".to_string()];
+        let request = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("Hello")
+            .stop(stops)
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["stop"], serde_json::json!(["a", "b"]));
+    }
+
+    // --- Cycle 6.4: ResponseMessage typed role ---
+
+    #[test]
+    fn test_response_message_typed_role_serializes() {
+        let msg = ResponseMessage::user("Hello");
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["role"], "user");
+    }
+
+    #[test]
+    fn test_response_message_typed_role_deserializes() {
+        let json = serde_json::json!({"role": "assistant", "content": "Hi"});
+        let msg: ResponseMessage = serde_json::from_value(json).unwrap();
+        assert_eq!(msg.role, crate::chat::Role::Assistant);
+    }
+
+    // --- M3 R4: ResponseOutput::role typed as Role ---
+
+    #[test]
+    fn test_response_output_role_is_typed() {
+        let json = serde_json::json!({
+            "id": "out_1",
+            "type": "message",
+            "role": "assistant",
+            "content": []
+        });
+        let output: ResponseOutput = serde_json::from_value(json).unwrap();
+        assert_eq!(output.role, Some(crate::chat::Role::Assistant));
+    }
+
+    #[test]
+    fn test_response_output_role_none_when_absent() {
+        let json = serde_json::json!({
+            "id": "out_2",
+            "type": "web_search_call"
+        });
+        let output: ResponseOutput = serde_json::from_value(json).unwrap();
+        assert_eq!(output.role, None);
+    }
+
+    #[test]
+    fn test_response_builder_implements_debug() {
+        let builder = CreateResponseRequest::builder().model("gpt-4o");
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("CreateResponseRequestBuilder"));
+        assert!(debug.contains("gpt-4o"));
+    }
+
+    #[test]
+    fn test_response_rejects_whitespace_only_model() {
+        let result = CreateResponseRequest::builder()
+            .model("  ")
+            .input("Hello")
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("model cannot be empty"));
+    }
+
+    // --- previous_response_id validation tests ---
+
+    #[test]
+    fn test_try_build_rejects_empty_previous_response_id() {
+        let result = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("hello")
+            .previous_response_id("")
+            .try_build();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("previous_response_id"), "got: {err}");
+    }
+
+    #[test]
+    fn test_try_build_rejects_whitespace_previous_response_id() {
+        let result = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("hello")
+            .previous_response_id("   ")
+            .try_build();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_build_accepts_valid_previous_response_id() {
+        let result = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("hello")
+            .previous_response_id("resp_abc123")
+            .try_build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_try_build_without_previous_response_id_is_ok() {
+        let result = CreateResponseRequest::builder()
+            .model("gpt-4o")
+            .input("hello")
+            .try_build();
+        assert!(result.is_ok());
     }
 }

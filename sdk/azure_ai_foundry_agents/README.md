@@ -21,8 +21,8 @@ Agent Service client for the Azure AI Foundry Rust SDK.
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.5"
-azure_ai_foundry_agents = "0.5"
+azure_ai_foundry_core = "0.7"
+azure_ai_foundry_agents = "0.7"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .model("gpt-4o")
         .name("My Assistant")
         .instructions("You are a helpful assistant.")
-        .build()?;
+        .try_build()?;
 
     let agent = agent::create(&client, &request).await?;
     println!("Created agent: {}", agent.id);
@@ -70,21 +70,22 @@ let thread = thread::create(client, None).await?;
 // Add a message
 let msg_request = MessageCreateRequest::builder()
     .content("What is the weather in Paris?")
-    .build()?;
+    .try_build()?;
 message::create(client, &thread.id, &msg_request).await?;
 
 // Run the agent
 let run_request = RunCreateRequest::builder()
     .assistant_id(agent_id)
-    .build()?;
+    .try_build()?;
 let created_run = run::create(client, &thread.id, &run_request).await?;
 
-// Poll until complete
+// Poll until complete (None = unlimited attempts)
 let completed_run = run::poll_until_complete(
     client,
     &thread.id,
     &created_run.id,
     Duration::from_secs(1),
+    None,
 ).await?;
 
 // Get the response
@@ -152,7 +153,7 @@ let outputs = vec![ToolOutput {
 }];
 
 let run = run::submit_tool_outputs_and_poll(
-    client, "thread_xyz", "run_abc", &outputs, Duration::from_secs(1),
+    client, "thread_xyz", "run_abc", &outputs, Duration::from_secs(1), Some(60),
 ).await?;
 # Ok(())
 # }

@@ -11,6 +11,9 @@ categories.workspace = true
 readme = "README.md"
 documentation = "https://docs.rs/azure_ai_foundry_core"
 
+[lints]
+workspace = true
+
 [dependencies]
 azure_core.workspace = true
 azure_identity.workspace = true
@@ -25,6 +28,9 @@ tokio.workspace = true
 fastrand.workspace = true
 bytes.workspace = true
 
+# Optional: exposed under the `test-support` feature for sibling crates.
+wiremock = { workspace = true, optional = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock.workspace = true
@@ -32,3 +38,6 @@ async-trait = "0.1"
 serial_test = "3.2"
 futures.workspace = true
 tracing-test = "0.2"
+
+[features]
+test-support = ["wiremock"]

@@ -57,6 +57,17 @@ pub enum VectorStoreStatus {
     Completed,
 }
 
+impl std::fmt::Display for VectorStoreStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+            Self::Expired => "expired",
+        };
+        f.write_str(s)
+    }
+}
+
 /// File count statistics for a vector store.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileCounts {
@@ -72,11 +83,21 @@ pub struct FileCounts {
     pub total: u32,
 }
 
+/// The anchor point for vector store expiration.
+///
+/// Currently the only accepted value is `"last_active_at"`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpiresAfterAnchor {
+    /// Expiration is measured from the last time the vector store was accessed.
+    LastActiveAt,
+}
+
 /// Expiration configuration for a vector store.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpiresAfter {
-    /// The anchor point for expiration (e.g., "last_active_at").
-    pub anchor: String,
+    /// The anchor point for expiration.
+    pub anchor: ExpiresAfterAnchor,
     /// Number of days until expiration.
     pub days: u32,
 }
@@ -477,7 +498,7 @@ pub async fn create(
 )]
 pub async fn get(client: &FoundryClient, vector_store_id: &str) -> FoundryResult<VectorStore> {
     tracing::debug!("getting vector store");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!("/vector_stores/{}?{}", vector_store_id, API_VERSION);
     let response = client.get(&path).await?;
     let store = response.json::<VectorStore>().await?;
@@ -550,7 +571,7 @@ pub async fn update(
     request: &VectorStoreUpdateRequest,
 ) -> FoundryResult<VectorStore> {
     tracing::debug!("updating vector store");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!("/vector_stores/{}?{}", vector_store_id, API_VERSION);
     let response = client.post(&path, request).await?;
     let store = response.json::<VectorStore>().await?;
@@ -588,7 +609,7 @@ pub async fn delete(
     vector_store_id: &str,
 ) -> FoundryResult<VectorStoreDeletionResponse> {
     tracing::debug!("deleting vector store");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!("/vector_stores/{}?{}", vector_store_id, API_VERSION);
     let response = client.delete(&path).await?;
     let result = response.json::<VectorStoreDeletionResponse>().await?;
@@ -629,7 +650,7 @@ pub async fn add_file(
     file_id: &str,
 ) -> FoundryResult<VectorStoreFile> {
     tracing::debug!("adding file to vector store");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!("/vector_stores/{}/files?{}", vector_store_id, API_VERSION);
     let body = serde_json::json!({"file_id": file_id});
     let response = client.post(&path, &body).await?;
@@ -668,7 +689,7 @@ pub async fn list_files(
     vector_store_id: &str,
 ) -> FoundryResult<VectorStoreFileList> {
     tracing::debug!("listing vector store files");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!("/vector_stores/{}/files?{}", vector_store_id, API_VERSION);
     let response = client.get(&path).await?;
     let list = response.json::<VectorStoreFileList>().await?;
@@ -705,7 +726,8 @@ pub async fn get_file(
     file_id: &str,
 ) -> FoundryResult<VectorStoreFile> {
     tracing::debug!("getting vector store file");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
+    FoundryClient::validate_resource_id(file_id)?;
     let path = format!(
         "/vector_stores/{}/files/{}?{}",
         vector_store_id, file_id, API_VERSION
@@ -747,7 +769,8 @@ pub async fn delete_file(
     file_id: &str,
 ) -> FoundryResult<VectorStoreFileDeletionResponse> {
     tracing::debug!("deleting vector store file");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
+    FoundryClient::validate_resource_id(file_id)?;
     let path = format!(
         "/vector_stores/{}/files/{}?{}",
         vector_store_id, file_id, API_VERSION
@@ -794,7 +817,7 @@ pub async fn create_file_batch<S: AsRef<str>>(
     file_ids: &[S],
 ) -> FoundryResult<VectorStoreFileBatch> {
     tracing::debug!(file_count = file_ids.len(), "creating file batch");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
     let path = format!(
         "/vector_stores/{}/file_batches?{}",
         vector_store_id, API_VERSION
@@ -836,7 +859,8 @@ pub async fn get_file_batch(
     batch_id: &str,
 ) -> FoundryResult<VectorStoreFileBatch> {
     tracing::debug!("getting file batch");
-
+    FoundryClient::validate_resource_id(vector_store_id)?;
+    FoundryClient::validate_resource_id(batch_id)?;
     let path = format!(
         "/vector_stores/{}/file_batches/{}?{}",
         vector_store_id, batch_id, API_VERSION
@@ -897,7 +921,7 @@ mod tests {
         assert_eq!(store.status, VectorStoreStatus::Completed);
         assert!(store.expires_after.is_some());
         let ea = store.expires_after.unwrap();
-        assert_eq!(ea.anchor, "last_active_at");
+        assert_eq!(ea.anchor, ExpiresAfterAnchor::LastActiveAt);
         assert_eq!(ea.days, 7);
         assert_eq!(store.expires_at, Some(1700100000));
         assert_eq!(store.last_active_at, Some(TEST_TIMESTAMP));
@@ -942,7 +966,7 @@ mod tests {
             .name("Test Store")
             .file_ids(vec!["file-1".into(), "file-2".into()])
             .expires_after(ExpiresAfter {
-                anchor: "last_active_at".into(),
+                anchor: ExpiresAfterAnchor::LastActiveAt,
                 days: 30,
             })
             .metadata(serde_json::json!({"env": "test"}))
@@ -955,6 +979,25 @@ mod tests {
         assert_eq!(json["file_ids"][1], "file-2");
         assert_eq!(json["expires_after"]["days"], 30);
         assert_eq!(json["metadata"]["env"], "test");
+    }
+
+    #[test]
+    fn expires_after_anchor_serializes_to_last_active_at() {
+        let ea = ExpiresAfter {
+            anchor: ExpiresAfterAnchor::LastActiveAt,
+            days: 7,
+        };
+        let json = serde_json::to_value(&ea).unwrap();
+        assert_eq!(json["anchor"], "last_active_at");
+        assert_eq!(json["days"], 7);
+    }
+
+    #[test]
+    fn expires_after_anchor_deserializes_from_last_active_at() {
+        let json = serde_json::json!({"anchor": "last_active_at", "days": 14});
+        let ea: ExpiresAfter = serde_json::from_value(json).unwrap();
+        assert_eq!(ea.anchor, ExpiresAfterAnchor::LastActiveAt);
+        assert_eq!(ea.days, 14);
     }
 
     #[test]
@@ -1544,5 +1587,41 @@ mod tests {
         let result = create_file_batch(&client, "vs_abc", &ids).await;
 
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_vector_store_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../evil").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+    }
+
+    // --- Cycle 6.3: Display for VectorStoreStatus ---
+
+    #[test]
+    fn test_vector_store_status_display_matches_serde() {
+        let pairs = [
+            (VectorStoreStatus::InProgress, "in_progress"),
+            (VectorStoreStatus::Completed, "completed"),
+            (VectorStoreStatus::Expired, "expired"),
+        ];
+        for (status, expected) in pairs {
+            assert_eq!(
+                status.to_string(),
+                expected,
+                "Display mismatch for {:?}",
+                status
+            );
+        }
     }
 }

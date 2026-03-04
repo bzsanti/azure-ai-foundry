@@ -39,7 +39,7 @@
 use crate::error::{FoundryError, FoundryResult};
 use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
 use secrecy::{ExposeSecret, SecretString};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::sync::Mutex;
 
@@ -53,6 +53,15 @@ pub const TOKEN_EXPIRY_BUFFER: Duration = Duration::from_secs(120);
 
 /// The scope required for Azure AI Foundry / Cognitive Services APIs.
 pub const COGNITIVE_SERVICES_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
+
+/// Pre-computed `azure_core::time::Duration` from [`TOKEN_EXPIRY_BUFFER`].
+///
+/// Using `LazyLock` ensures the conversion happens once at first access rather
+/// than calling `try_from().expect()` on every `resolve()` invocation.
+static TOKEN_EXPIRY_BUFFER_AZURE: LazyLock<azure_core::time::Duration> = LazyLock::new(|| {
+    azure_core::time::Duration::try_from(TOKEN_EXPIRY_BUFFER)
+        .expect("TOKEN_EXPIRY_BUFFER (120s) is a valid duration")
+});
 
 /// Credential types supported by the Azure AI Foundry SDK.
 ///
@@ -213,8 +222,7 @@ impl FoundryCredential {
                 // Check if we have a valid cached token (with expiry buffer)
                 if let Some(ref token) = *cached {
                     let now = azure_core::time::OffsetDateTime::now_utc();
-                    let buffer = azure_core::time::Duration::try_from(TOKEN_EXPIRY_BUFFER)
-                        .expect("buffer duration should be valid");
+                    let buffer = *TOKEN_EXPIRY_BUFFER_AZURE;
                     let refresh_at = token.expires_on - buffer;
 
                     if now < refresh_at {
@@ -276,6 +284,12 @@ impl FoundryCredential {
     ///
     /// * `options` - Token request options for advanced scenarios.
     ///
+    /// # Lifetime
+    ///
+    /// The lifetime on `TokenRequestOptions<'_>` ties the options to the scope of
+    /// this call. Options are passed directly to the underlying identity provider
+    /// and are not retained. Stack-allocated claims or tenant IDs are safe to pass.
+    ///
     /// # Errors
     ///
     /// Returns an error if this is an API key credential or if token acquisition fails.
@@ -298,13 +312,23 @@ impl FoundryCredential {
     }
 
     /// Deprecated: use [`fetch_fresh_token()`](Self::fetch_fresh_token) instead.
-    #[deprecated(since = "0.3.0", note = "Use fetch_fresh_token() instead")]
+    ///
+    /// This method will be **removed in v0.8.0**.
+    #[deprecated(
+        since = "0.3.0",
+        note = "Use fetch_fresh_token() instead. This method will be removed in v0.8.0."
+    )]
     pub async fn get_token(&self) -> FoundryResult<AccessToken> {
         self.fetch_fresh_token().await
     }
 
     /// Deprecated: use [`fetch_fresh_token_with_options()`](Self::fetch_fresh_token_with_options) instead.
-    #[deprecated(since = "0.3.0", note = "Use fetch_fresh_token_with_options() instead")]
+    ///
+    /// This method will be **removed in v0.8.0**.
+    #[deprecated(
+        since = "0.3.0",
+        note = "Use fetch_fresh_token_with_options() instead. This method will be removed in v0.8.0."
+    )]
     pub async fn get_token_with_options(
         &self,
         options: TokenRequestOptions<'_>,
@@ -884,6 +908,18 @@ mod tests {
             mock.call_count(),
             2,
             "Token with 90s expiry should be refreshed when buffer is 120s"
+        );
+    }
+
+    #[test]
+    fn test_token_expiry_buffer_azure_conversion() {
+        // The TOKEN_EXPIRY_BUFFER_AZURE static must be computed without panicking.
+        // This verifies the LazyLock computes successfully (not at per-call expect).
+        let buffer = *super::TOKEN_EXPIRY_BUFFER_AZURE;
+        // Just verify it's a positive, non-zero duration
+        assert!(
+            buffer > azure_core::time::Duration::ZERO,
+            "TOKEN_EXPIRY_BUFFER_AZURE must be positive"
         );
     }
 

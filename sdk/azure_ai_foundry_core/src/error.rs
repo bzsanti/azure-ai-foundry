@@ -63,6 +63,13 @@ pub enum FoundryError {
     /// A required builder field is missing.
     #[error("Builder error: {0}")]
     Builder(String),
+
+    /// A runtime validation error (invalid input, constraint violation).
+    #[error("Validation error{}: {message}", field.as_ref().map(|f| format!(" ({f})")).unwrap_or_default())]
+    Validation {
+        field: Option<String>,
+        message: String,
+    },
 }
 
 impl From<azure_core::Error> for FoundryError {
@@ -155,11 +162,93 @@ impl FoundryError {
             source: Some(Box::new(source)),
         }
     }
+
+    /// Creates a validation error without a field name.
+    pub fn validation(message: impl Into<String>) -> Self {
+        Self::Validation {
+            field: None,
+            message: message.into(),
+        }
+    }
+
+    /// Creates a validation error for a specific field.
+    pub fn validation_field(field: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::Validation {
+            field: Some(field.into()),
+            message: message.into(),
+        }
+    }
+
+    /// Returns `true` if this error is likely transient and the request may
+    /// succeed on retry.
+    ///
+    /// Retryable errors are HTTP 429 (rate limit), 500, 502, 503, and 504.
+    /// All other error types (validation, auth, client errors) are not retryable.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Http { status, .. } => crate::client::is_retriable_status(*status),
+            _ => false,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- is_retryable() tests ---
+
+    #[test]
+    fn foundry_error_is_retryable_for_rate_limit() {
+        let err = FoundryError::http(429, "Too Many Requests");
+        assert!(err.is_retryable(), "429 should be retryable");
+    }
+
+    #[test]
+    fn foundry_error_is_retryable_for_server_errors() {
+        for status in [500, 502, 503, 504] {
+            let err = FoundryError::http(status, "Server Error");
+            assert!(err.is_retryable(), "{status} should be retryable");
+        }
+    }
+
+    #[test]
+    fn foundry_error_is_not_retryable_for_client_error() {
+        let err = FoundryError::http(400, "Bad Request");
+        assert!(!err.is_retryable(), "400 should not be retryable");
+    }
+
+    #[test]
+    fn foundry_error_is_not_retryable_for_not_found() {
+        let err = FoundryError::http(404, "Not Found");
+        assert!(!err.is_retryable(), "404 should not be retryable");
+    }
+
+    #[test]
+    fn foundry_error_is_not_retryable_for_auth() {
+        let err = FoundryError::auth("unauthorized");
+        assert!(!err.is_retryable(), "auth errors should not be retryable");
+    }
+
+    #[test]
+    fn foundry_error_is_not_retryable_for_validation() {
+        let err = FoundryError::validation("missing field");
+        assert!(
+            !err.is_retryable(),
+            "validation errors should not be retryable"
+        );
+    }
+
+    #[test]
+    fn foundry_error_is_not_retryable_for_builder() {
+        let err = FoundryError::Builder("bad config".into());
+        assert!(
+            !err.is_retryable(),
+            "builder errors should not be retryable"
+        );
+    }
+
+    // --- Error display tests ---
 
     #[test]
     fn http_error_display() {
@@ -374,6 +463,56 @@ mod tests {
         // Verify source chain is preserved
         let source = foundry_err.source().expect("should have source");
         assert!(source.to_string().contains("key must be a string"));
+    }
+
+    #[test]
+    fn validation_error_display_with_field() {
+        let err = FoundryError::validation_field("model", "must not be empty");
+        assert_eq!(
+            err.to_string(),
+            "Validation error (model): must not be empty"
+        );
+    }
+
+    #[test]
+    fn validation_error_display_without_field() {
+        let err = FoundryError::validation("at least one tool output is required");
+        assert_eq!(
+            err.to_string(),
+            "Validation error: at least one tool output is required"
+        );
+    }
+
+    #[test]
+    fn validation_error_is_distinct_from_builder() {
+        let validation = FoundryError::validation("bad input");
+        let builder = FoundryError::Builder("bad input".into());
+
+        // They should produce different display messages
+        assert_ne!(validation.to_string(), builder.to_string());
+        assert!(validation.to_string().starts_with("Validation error"));
+        assert!(builder.to_string().starts_with("Builder error"));
+    }
+
+    #[test]
+    fn validation_error_matches_variant() {
+        let err = FoundryError::validation_field("id", "cannot be empty");
+        assert!(matches!(
+            err,
+            FoundryError::Validation {
+                field: Some(_),
+                message: _
+            }
+        ));
+
+        let err = FoundryError::validation("invalid input");
+        assert!(matches!(
+            err,
+            FoundryError::Validation {
+                field: None,
+                message: _
+            }
+        ));
     }
 
     /// Backward compatibility test: verify error message formats are unchanged

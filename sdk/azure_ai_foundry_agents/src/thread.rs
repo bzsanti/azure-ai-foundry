@@ -197,7 +197,7 @@ pub async fn create(
 )]
 pub async fn get(client: &FoundryClient, thread_id: &str) -> FoundryResult<Thread> {
     tracing::debug!("getting thread");
-
+    FoundryClient::validate_resource_id(thread_id)?;
     let path = format!("/threads/{}?{}", thread_id, API_VERSION);
     let response = client.get(&path).await?;
     let thread = response.json::<Thread>().await?;
@@ -234,7 +234,7 @@ pub async fn delete(
     thread_id: &str,
 ) -> FoundryResult<ThreadDeletionResponse> {
     tracing::debug!("deleting thread");
-
+    FoundryClient::validate_resource_id(thread_id)?;
     let path = format!("/threads/{}?{}", thread_id, API_VERSION);
     let response = client.delete(&path).await?;
     let result = response.json::<ThreadDeletionResponse>().await?;
@@ -276,7 +276,7 @@ pub async fn update(
     request: &ThreadUpdateRequest,
 ) -> FoundryResult<Thread> {
     tracing::debug!("updating thread");
-
+    FoundryClient::validate_resource_id(thread_id)?;
     let path = format!("/threads/{}?{}", thread_id, API_VERSION);
     let response = client.post(&path, request).await?;
     let thread = response.json::<Thread>().await?;
@@ -524,6 +524,23 @@ mod tests {
     }
 
     // --- Quality: update() 404 error path ---
+
+    #[tokio::test]
+    async fn test_get_thread_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../etc/passwd").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+    }
 
     #[tokio::test]
     async fn test_update_thread_not_found() {

@@ -116,7 +116,11 @@ pub struct EmbeddingResponse {
 /// A single embedding in the response.
 #[derive(Debug, Clone, Deserialize)]
 pub struct EmbeddingData {
+    /// The object type, always `"embedding"`.
+    pub object: String,
+    /// The zero-based index of this embedding in the response batch.
     pub index: u32,
+    /// The embedding vector as a list of floating-point numbers.
     pub embedding: Vec<f32>,
 }
 
@@ -172,6 +176,7 @@ pub async fn embed(
 }
 
 /// Builder for [`EmbeddingRequest`].
+#[derive(Debug)]
 pub struct EmbeddingRequestBuilder {
     model: Option<String>,
     input: Option<EmbeddingInput>,
@@ -296,9 +301,12 @@ impl EmbeddingRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if `model` or `input` is not set.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model` or `input` is not set, or if `input` is empty.
+    /// Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> EmbeddingRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -865,5 +873,22 @@ mod tests {
         let _ = embed(&client, &request).await;
 
         assert!(logs_contain("foundry::embeddings::embed"));
+    }
+
+    #[test]
+    fn test_embedding_builder_implements_debug() {
+        let builder = EmbeddingRequest::builder().model("text-embedding-ada-002");
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("EmbeddingRequestBuilder"));
+        assert!(debug.contains("text-embedding-ada-002"));
+    }
+
+    #[test]
+    fn test_embedding_data_deserializes_object_field() {
+        let json = r#"{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3]}"#;
+        let data: EmbeddingData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.object, "embedding");
+        assert_eq!(data.index, 0);
+        assert_eq!(data.embedding.len(), 3);
     }
 }

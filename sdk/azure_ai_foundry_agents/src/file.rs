@@ -75,6 +75,27 @@ impl FilePurpose {
     }
 }
 
+impl std::fmt::Display for FilePurpose {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Processing status of a file.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStatus {
+    /// File has been uploaded but not yet processed.
+    Uploaded,
+    /// File has been successfully processed and is ready for use.
+    Processed,
+    /// File processing encountered an error. See `status_details` for more information.
+    Error,
+    /// An unknown status returned by the API (forward-compatibility).
+    #[serde(other)]
+    Unknown,
+}
+
 /// A file object stored in the service.
 #[derive(Debug, Clone, Deserialize)]
 pub struct FileObject {
@@ -97,7 +118,7 @@ pub struct FileObject {
     pub purpose: FilePurpose,
 
     /// Processing status of the file.
-    pub status: Option<String>,
+    pub status: Option<FileStatus>,
 
     /// Details about the processing status.
     pub status_details: Option<String>,
@@ -112,7 +133,28 @@ pub struct FileList {
     /// List of files.
     pub data: Vec<FileObject>,
 
-    /// Whether there are more files to fetch.
+    /// Whether there are more files beyond this page.
+    ///
+    /// When `true`, additional files exist that were not returned in this response.
+    /// Use the `id` of the last file in `data` as the `after` cursor parameter in
+    /// a subsequent `list` call to retrieve the next page.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use azure_ai_foundry_core::client::FoundryClient;
+    /// # use azure_ai_foundry_agents::file;
+    /// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
+    /// let page = file::list(client).await?;
+    /// if page.has_more {
+    ///     if let Some(last) = page.data.last() {
+    ///         println!("Next page starts after file: {}", last.id);
+    ///         // Pass last.id as the `after` parameter in the next list() call
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub has_more: bool,
 }
 
@@ -172,20 +214,28 @@ pub struct FileDeletionResponse {
 pub async fn upload(
     client: &FoundryClient,
     filename: &str,
-    data: Vec<u8>,
+    data: impl Into<bytes::Bytes>,
     purpose: FilePurpose,
 ) -> FoundryResult<FileObject> {
+    let data: bytes::Bytes = data.into();
+
     if filename.trim().is_empty() {
-        return Err(FoundryError::Builder("filename cannot be empty".into()));
+        return Err(FoundryError::validation_field(
+            "filename",
+            "filename cannot be empty",
+        ));
     }
     if data.is_empty() {
-        return Err(FoundryError::Builder("file data cannot be empty".into()));
+        return Err(FoundryError::validation_field(
+            "data",
+            "file data cannot be empty",
+        ));
     }
     if data.len() > MAX_FILE_SIZE_BYTES {
-        return Err(FoundryError::Builder(format!(
-            "file data exceeds the 512 MB limit ({} bytes)",
-            data.len()
-        )));
+        return Err(FoundryError::validation_field(
+            "data",
+            format!("file data exceeds the 512 MB limit ({} bytes)", data.len()),
+        ));
     }
 
     tracing::debug!(size_bytes = data.len(), "uploading file");
@@ -193,12 +243,15 @@ pub async fn upload(
     let path = format!("/files?{}", API_VERSION);
     let purpose_str = purpose.as_str().to_string();
     let filename_owned = filename.to_string();
-    let data = std::sync::Arc::new(data);
 
     let response = client
         .post_multipart(&path, move || {
-            let file_part =
-                reqwest::multipart::Part::bytes((*data).clone()).file_name(filename_owned.clone());
+            let data_len = data.len() as u64;
+            let file_part = reqwest::multipart::Part::stream_with_length(
+                reqwest::Body::from(data.clone()),
+                data_len,
+            )
+            .file_name(filename_owned.clone());
             reqwest::multipart::Form::new()
                 .part("file", file_part)
                 .text("purpose", purpose_str.clone())
@@ -235,7 +288,7 @@ pub async fn upload(
 )]
 pub async fn get(client: &FoundryClient, file_id: &str) -> FoundryResult<FileObject> {
     tracing::debug!("getting file");
-
+    FoundryClient::validate_resource_id(file_id)?;
     let path = format!("/files/{}?{}", file_id, API_VERSION);
     let response = client.get(&path).await?;
     let file = response.json::<FileObject>().await?;
@@ -300,7 +353,7 @@ pub async fn list(client: &FoundryClient) -> FoundryResult<FileList> {
 )]
 pub async fn delete(client: &FoundryClient, file_id: &str) -> FoundryResult<FileDeletionResponse> {
     tracing::debug!("deleting file");
-
+    FoundryClient::validate_resource_id(file_id)?;
     let path = format!("/files/{}?{}", file_id, API_VERSION);
     let response = client.delete(&path).await?;
     let result = response.json::<FileDeletionResponse>().await?;
@@ -335,7 +388,7 @@ pub async fn delete(client: &FoundryClient, file_id: &str) -> FoundryResult<File
 )]
 pub async fn download(client: &FoundryClient, file_id: &str) -> FoundryResult<bytes::Bytes> {
     tracing::debug!("downloading file content");
-
+    FoundryClient::validate_resource_id(file_id)?;
     let path = format!("/files/{}/content?{}", file_id, API_VERSION);
     let data = client.get_bytes(&path).await?;
 
@@ -349,6 +402,16 @@ mod tests {
     use crate::test_utils::{setup_mock_client, TEST_TIMESTAMP};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // --- R6: upload() accepts Into<bytes::Bytes> ---
+
+    #[test]
+    fn test_upload_accepts_bytes_type() {
+        // Verify that Into<bytes::Bytes> is satisfied by both Vec<u8> and Bytes
+        fn assert_into_bytes<T: Into<bytes::Bytes>>(_: T) {}
+        assert_into_bytes(vec![1u8, 2, 3]);
+        assert_into_bytes(bytes::Bytes::from_static(b"hello"));
+    }
 
     // --- Quality: FilePurpose::as_str() ---
 
@@ -382,7 +445,7 @@ mod tests {
         assert_eq!(file.created_at, TEST_TIMESTAMP);
         assert_eq!(file.filename, "data.jsonl");
         assert_eq!(file.purpose, FilePurpose::Assistants);
-        assert_eq!(file.status, Some("processed".into()));
+        assert_eq!(file.status, Some(FileStatus::Processed));
         assert_eq!(file.status_details, Some("ready".into()));
     }
 
@@ -695,5 +758,147 @@ mod tests {
         let content = download(&client, "file-abc").await.expect("should succeed");
 
         assert_eq!(content.as_ref(), raw_content);
+    }
+
+    // =======================================================================
+    // M2: File upload bytes fix (C1) — zero-copy on retries
+    // =======================================================================
+
+    #[tokio::test]
+    async fn test_upload_with_bytes_zero_copy() {
+        // Verifies that upload works with bytes::Bytes directly,
+        // which enables O(1) cloning inside the retry closure.
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "id": "file-bytes",
+            "object": "file",
+            "bytes": 5,
+            "created_at": TEST_TIMESTAMP,
+            "filename": "test.bin",
+            "purpose": "assistants"
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&expected_response))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        // Pass bytes::Bytes directly (not Vec<u8>) to exercise the zero-copy path
+        let data = bytes::Bytes::from_static(b"hello");
+        let file = upload(&client, "test.bin", data, FilePurpose::Assistants)
+            .await
+            .expect("upload with Bytes should succeed");
+
+        assert_eq!(file.id, "file-bytes");
+    }
+
+    #[tokio::test]
+    async fn test_get_file_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../evil").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_file_purpose_display_matches_as_str() {
+        for purpose in [
+            FilePurpose::Assistants,
+            FilePurpose::AssistantsOutput,
+            FilePurpose::FineTune,
+        ] {
+            assert_eq!(purpose.to_string(), purpose.as_str());
+        }
+    }
+
+    #[test]
+    fn test_file_purpose_display_matches_serde() {
+        for purpose in [
+            FilePurpose::Assistants,
+            FilePurpose::AssistantsOutput,
+            FilePurpose::FineTune,
+        ] {
+            let serde_val = serde_json::to_value(purpose).unwrap();
+            assert_eq!(
+                serde_val.as_str().unwrap(),
+                purpose.to_string(),
+                "Display does not match serde for {:?}",
+                purpose
+            );
+        }
+    }
+
+    // --- FileStatus enum tests ---
+
+    #[test]
+    fn test_file_status_deserializes_uploaded() {
+        let json = r#"{"status": "uploaded"}"#;
+        #[derive(serde::Deserialize)]
+        struct W {
+            status: FileStatus,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.status, FileStatus::Uploaded);
+    }
+
+    #[test]
+    fn test_file_status_deserializes_processed() {
+        let json = r#"{"status": "processed"}"#;
+        #[derive(serde::Deserialize)]
+        struct W {
+            status: FileStatus,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.status, FileStatus::Processed);
+    }
+
+    #[test]
+    fn test_file_status_deserializes_error() {
+        let json = r#"{"status": "error"}"#;
+        #[derive(serde::Deserialize)]
+        struct W {
+            status: FileStatus,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.status, FileStatus::Error);
+    }
+
+    #[test]
+    fn test_file_status_deserializes_unknown_variant() {
+        let json = r#"{"status": "pending_review"}"#;
+        #[derive(serde::Deserialize)]
+        struct W {
+            status: FileStatus,
+        }
+        let w: W = serde_json::from_str(json).unwrap();
+        assert_eq!(w.status, FileStatus::Unknown);
+    }
+
+    #[test]
+    fn test_file_object_status_is_typed() {
+        let json = r#"{
+            "id": "file-123",
+            "object": "file",
+            "bytes": 1024,
+            "created_at": 1700000000,
+            "filename": "data.jsonl",
+            "purpose": "assistants",
+            "status": "uploaded"
+        }"#;
+        let obj: FileObject = serde_json::from_str(json).unwrap();
+        assert_eq!(obj.status, Some(FileStatus::Uploaded));
     }
 }

@@ -77,6 +77,7 @@ pub struct ChatCompletionRequest {
 }
 
 /// Builder for [`ChatCompletionRequest`].
+#[derive(Debug)]
 pub struct ChatCompletionRequestBuilder {
     model: Option<String>,
     messages: Vec<Message>,
@@ -156,8 +157,10 @@ impl ChatCompletionRequestBuilder {
     /// Set stop sequences.
     ///
     /// The model will stop generating when it encounters any of these sequences.
-    pub fn stop(mut self, stop: Vec<String>) -> Self {
-        self.stop = Some(stop);
+    /// Accepts any iterable of string-like values, including `Vec<String>`,
+    /// `&[&str]`, arrays, or any iterator yielding `impl Into<String>`.
+    pub fn stop(mut self, stop: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.stop = Some(stop.into_iter().map(Into::into).collect());
         self
     }
 
@@ -185,6 +188,10 @@ impl ChatCompletionRequestBuilder {
         let model = self
             .model
             .ok_or_else(|| FoundryError::Builder("model is required".into()))?;
+
+        if model.trim().is_empty() {
+            return Err(FoundryError::Builder("model cannot be empty".into()));
+        }
 
         // Validate at least one message is present
         if self.messages.is_empty() {
@@ -242,9 +249,13 @@ impl ChatCompletionRequestBuilder {
         })
     }
 
-    /// Build the request. Panics if `model` is not set.
+    /// Build the request.
     ///
-    /// Consider using [`try_build`](Self::try_build) for fallible construction.
+    /// # Panics
+    ///
+    /// Panics if `model` is not set, `messages` is empty, or if parameter values
+    /// (`temperature`, `top_p`, `presence_penalty`, `frequency_penalty`) are out
+    /// of range. Use [`try_build`](Self::try_build) for fallible construction.
     pub fn build(self) -> ChatCompletionRequest {
         self.try_build().expect("builder validation failed")
     }
@@ -284,7 +295,7 @@ impl Message {
 }
 
 /// The role of a message in a conversation.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
@@ -770,7 +781,7 @@ mod tests {
             .temperature(0.7)
             .top_p(0.9)
             .max_tokens(100)
-            .stop(vec!["END".into()])
+            .stop(["END"])
             .presence_penalty(0.5)
             .frequency_penalty(0.3)
             .build();
@@ -780,7 +791,7 @@ mod tests {
         assert_eq!(request.temperature, Some(0.7));
         assert_eq!(request.top_p, Some(0.9));
         assert_eq!(request.max_tokens, Some(100));
-        assert_eq!(request.stop, Some(vec!["END".into()]));
+        assert_eq!(request.stop, Some(vec!["END".to_string()]));
         assert_eq!(request.presence_penalty, Some(0.5));
         assert_eq!(request.frequency_penalty, Some(0.3));
     }
@@ -1924,5 +1935,66 @@ data: [DONE]
         let _ = complete_stream(&client, &request).await;
 
         assert!(logs_contain("foundry::chat::complete_stream"));
+    }
+
+    // --- Cycle 6.1: stop() accepts impl IntoIterator ---
+
+    #[test]
+    fn test_stop_accepts_str_slice() {
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hi"))
+            .stop(["stop1", "stop2"])
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["stop"], serde_json::json!(["stop1", "stop2"]));
+    }
+
+    #[test]
+    fn test_stop_accepts_iterator() {
+        let stops = vec!["a".to_string(), "b".to_string()];
+        let request = ChatCompletionRequest::builder()
+            .model("gpt-4o")
+            .message(Message::user("Hi"))
+            .stop(stops)
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["stop"], serde_json::json!(["a", "b"]));
+    }
+
+    // =======================================================================
+    // M6 R5: Uniform empty-string validation
+    // =======================================================================
+
+    #[test]
+    fn test_chat_rejects_whitespace_only_model() {
+        let result = ChatCompletionRequest::builder()
+            .model("  ")
+            .message(Message::user("Hello"))
+            .try_build();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("model cannot be empty"));
+    }
+
+    #[test]
+    fn test_chat_builder_implements_debug() {
+        let builder = ChatCompletionRequest::builder().model("gpt-4o");
+        let debug = format!("{:?}", builder);
+        assert!(debug.contains("ChatCompletionRequestBuilder"));
+        assert!(debug.contains("gpt-4o"));
+    }
+
+    #[test]
+    fn test_role_can_be_used_as_hash_map_key() {
+        use std::collections::HashMap;
+        let mut counts: HashMap<Role, u32> = HashMap::new();
+        *counts.entry(Role::User).or_insert(0) += 1;
+        *counts.entry(Role::Assistant).or_insert(0) += 1;
+        *counts.entry(Role::User).or_insert(0) += 1;
+        assert_eq!(counts[&Role::User], 2);
+        assert_eq!(counts[&Role::Assistant], 1);
     }
 }

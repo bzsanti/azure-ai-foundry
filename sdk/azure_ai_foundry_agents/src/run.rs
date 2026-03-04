@@ -24,20 +24,20 @@
 //! let agent_req = AgentCreateRequest::builder()
 //!     .model("gpt-4o")
 //!     .instructions("You are helpful.")
-//!     .build()?;
+//!     .try_build()?;
 //! let agent = agent::create(&client, &agent_req).await?;
 //!
 //! // Create a thread with a message
 //! let thread = thread::create(&client, None).await?;
 //! let msg_req = MessageCreateRequest::builder()
 //!     .content("What is 2+2?")
-//!     .build()?;
+//!     .try_build()?;
 //! message::create(&client, &thread.id, &msg_req).await?;
 //!
 //! // Run the agent on the thread
 //! let run_req = RunCreateRequest::builder()
 //!     .assistant_id(&agent.id)
-//!     .build()?;
+//!     .try_build()?;
 //! let mut run_result = run::create(&client, &thread.id, &run_req).await?;
 //!
 //! // Poll until complete
@@ -55,6 +55,7 @@ use std::time::Duration;
 
 use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
+use azure_ai_foundry_core::models::Usage;
 use serde::{Deserialize, Serialize};
 
 use crate::models::API_VERSION;
@@ -175,7 +176,7 @@ impl RunCreateRequestBuilder {
     /// # Errors
     ///
     /// Returns an error if `assistant_id` is not set.
-    pub fn build(self) -> FoundryResult<RunCreateRequest> {
+    pub fn try_build(self) -> FoundryResult<RunCreateRequest> {
         let assistant_id = self
             .assistant_id
             .ok_or_else(|| FoundryError::Builder("assistant_id is required".into()))?;
@@ -213,6 +214,16 @@ impl RunCreateRequestBuilder {
             max_completion_tokens: self.max_completion_tokens,
         })
     }
+
+    /// Build the request.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `assistant_id` is not set, or if `temperature` or `top_p` is
+    /// out of range. Use [`try_build`](Self::try_build) for fallible construction.
+    pub fn build(self) -> RunCreateRequest {
+        self.try_build().expect("builder validation failed")
+    }
 }
 
 /// A tool output to submit for a tool call.
@@ -230,9 +241,9 @@ pub struct ToolOutput {
 
 /// Request to submit tool outputs for a run.
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct SubmitToolOutputsRequest {
+pub(crate) struct SubmitToolOutputsRequest<'a> {
     /// The tool outputs to submit.
-    pub tool_outputs: Vec<ToolOutput>,
+    pub tool_outputs: &'a [ToolOutput],
 }
 
 /// Request to create a thread and run in a single call.
@@ -269,8 +280,8 @@ pub struct ThreadCreateConfig {
 /// An initial message to add when creating a thread.
 #[derive(Debug, Clone, Serialize)]
 pub struct InitialMessage {
-    /// Role of the message (typically "user").
-    pub role: String,
+    /// Role of the message.
+    pub role: crate::message::MessageRole,
     /// Content of the message.
     pub content: String,
 }
@@ -302,7 +313,7 @@ impl CreateThreadAndRunRequestBuilder {
     /// Add an initial user message.
     pub fn message(mut self, content: impl Into<String>) -> Self {
         self.messages.push(InitialMessage {
-            role: "user".into(),
+            role: crate::message::MessageRole::User,
             content: content.into(),
         });
         self
@@ -326,8 +337,8 @@ impl CreateThreadAndRunRequestBuilder {
         self
     }
 
-    /// Build the request.
-    pub fn build(self) -> FoundryResult<CreateThreadAndRunRequest> {
+    /// Build the request, returning an error if required fields are missing.
+    pub fn try_build(self) -> FoundryResult<CreateThreadAndRunRequest> {
         let assistant_id = self
             .assistant_id
             .ok_or_else(|| FoundryError::Builder("assistant_id is required".into()))?;
@@ -351,6 +362,16 @@ impl CreateThreadAndRunRequestBuilder {
             instructions: self.instructions,
             metadata: self.run_metadata,
         })
+    }
+
+    /// Build the request.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `assistant_id` is not set.
+    /// Use [`try_build`](Self::try_build) for fallible construction.
+    pub fn build(self) -> CreateThreadAndRunRequest {
+        self.try_build().expect("builder validation failed")
     }
 }
 
@@ -380,6 +401,23 @@ pub enum RunStatus {
     Incomplete,
     /// The run expired.
     Expired,
+}
+
+impl std::fmt::Display for RunStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Queued => "queued",
+            Self::InProgress => "in_progress",
+            Self::RequiresAction => "requires_action",
+            Self::Cancelling => "cancelling",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+            Self::Completed => "completed",
+            Self::Incomplete => "incomplete",
+            Self::Expired => "expired",
+        };
+        f.write_str(s)
+    }
 }
 
 /// A run on a thread.
@@ -431,10 +469,18 @@ pub struct Run {
     pub instructions: Option<String>,
 
     /// Usage statistics for the run.
-    pub usage: Option<RunUsage>,
+    pub usage: Option<Usage>,
 
     /// Metadata attached to the run.
     pub metadata: Option<serde_json::Value>,
+}
+
+/// The type of action required from the client.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequiredActionType {
+    /// The client must submit tool outputs.
+    SubmitToolOutputs,
 }
 
 /// Action required from the client.
@@ -442,7 +488,7 @@ pub struct Run {
 pub struct RequiredAction {
     /// The type of action required.
     #[serde(rename = "type")]
-    pub action_type: String,
+    pub action_type: RequiredActionType,
 
     /// Tool calls that need outputs submitted.
     pub submit_tool_outputs: Option<SubmitToolOutputs>,
@@ -463,7 +509,7 @@ pub struct ToolCall {
 
     /// The type of tool call.
     #[serde(rename = "type")]
-    pub call_type: String,
+    pub call_type: crate::run_step::ToolCallType,
 
     /// The function that was called.
     pub function: Option<FunctionCall>,
@@ -489,18 +535,14 @@ pub struct RunError {
     pub message: String,
 }
 
-/// Usage statistics for a run.
-#[derive(Debug, Clone, Deserialize)]
-pub struct RunUsage {
-    /// Number of prompt tokens used.
-    pub prompt_tokens: u32,
-
-    /// Number of completion tokens used.
-    pub completion_tokens: u32,
-
-    /// Total tokens used.
-    pub total_tokens: u32,
-}
+/// Deprecated: Use [`azure_ai_foundry_core::models::Usage`] instead.
+///
+/// This type alias will be **removed in v0.8.0**.
+#[deprecated(
+    since = "0.7.0",
+    note = "Use azure_ai_foundry_core::models::Usage instead. This alias will be removed in v0.8.0."
+)]
+pub type RunUsage = Usage;
 
 // ---------------------------------------------------------------------------
 // API functions
@@ -516,7 +558,7 @@ pub struct RunUsage {
 /// # async fn example(client: &FoundryClient) -> azure_ai_foundry_core::error::FoundryResult<()> {
 /// let request = RunCreateRequest::builder()
 ///     .assistant_id("asst_abc123")
-///     .build()?;
+///     .try_build()?;
 ///
 /// let run = run::create(client, "thread_xyz", &request).await?;
 /// println!("Run started: {} (status: {:?})", run.id, run.status);
@@ -538,7 +580,7 @@ pub async fn create(
     request: &RunCreateRequest,
 ) -> FoundryResult<Run> {
     tracing::debug!("creating run");
-
+    FoundryClient::validate_resource_id(thread_id)?;
     let path = format!("/threads/{}/runs?{}", thread_id, API_VERSION);
     let response = client.post(&path, request).await?;
     let run = response.json::<Run>().await?;
@@ -577,7 +619,8 @@ pub async fn create(
 )]
 pub async fn get(client: &FoundryClient, thread_id: &str, run_id: &str) -> FoundryResult<Run> {
     tracing::debug!("getting run");
-
+    FoundryClient::validate_resource_id(thread_id)?;
+    FoundryClient::validate_resource_id(run_id)?;
     let path = format!("/threads/{}/runs/{}?{}", thread_id, run_id, API_VERSION);
     let response = client.get(&path).await?;
     let run = response.json::<Run>().await?;
@@ -599,7 +642,7 @@ pub async fn get(client: &FoundryClient, thread_id: &str, run_id: &str) -> Found
 /// let request = CreateThreadAndRunRequest::builder()
 ///     .assistant_id("asst_abc123")
 ///     .message("What is the weather like?")
-///     .build()?;
+///     .try_build()?;
 ///
 /// let run = run::create_thread_and_run(client, &request).await?;
 /// println!("Thread: {}, Run: {}", run.thread_id, run.id);
@@ -644,6 +687,14 @@ pub async fn create_thread_and_run(
 /// * `thread_id` - The thread ID.
 /// * `run_id` - The run ID.
 /// * `poll_interval` - How often to check the run status.
+/// * `max_attempts` - Maximum number of poll attempts, or `None` for unlimited.
+///
+/// # Warning
+///
+/// When `max_attempts` is `None`, this function polls indefinitely. If the run
+/// never reaches a terminal state (e.g., due to a service outage or an agent bug),
+/// the caller will block forever. Always pass a finite `max_attempts` in production
+/// code, or wrap the call with [`tokio::time::timeout`] for a wall-clock deadline.
 ///
 /// # Example
 ///
@@ -657,6 +708,7 @@ pub async fn create_thread_and_run(
 ///     "thread_xyz",
 ///     "run_abc",
 ///     Duration::from_secs(1),
+///     Some(60),
 /// ).await?;
 ///
 /// println!("Run finished with status: {:?}", final_run.status);
@@ -673,7 +725,9 @@ pub async fn poll_until_complete(
     thread_id: &str,
     run_id: &str,
     poll_interval: std::time::Duration,
+    max_attempts: Option<u32>,
 ) -> FoundryResult<Run> {
+    let mut attempts: u32 = 0;
     loop {
         let run = get(client, thread_id, run_id).await?;
 
@@ -691,7 +745,16 @@ pub async fn poll_until_complete(
                 return Ok(run);
             }
             _ => {
-                tracing::trace!(status = ?run.status, "run still in progress");
+                attempts += 1;
+                if let Some(max) = max_attempts {
+                    if attempts >= max {
+                        return Err(FoundryError::validation(format!(
+                            "run did not complete after {} poll attempts",
+                            max
+                        )));
+                    }
+                }
+                tracing::trace!(status = ?run.status, attempt = attempts, "run still in progress");
                 tokio::time::sleep(poll_interval).await;
             }
         }
@@ -713,9 +776,14 @@ pub async fn poll_until_complete(
 /// let request = CreateThreadAndRunRequest::builder()
 ///     .assistant_id("asst_abc123")
 ///     .message("Hello!")
-///     .build()?;
+///     .try_build()?;
 ///
-/// let (thread, run) = run::create_and_poll(client, &request, Duration::from_secs(1)).await?;
+/// let (thread, run) = run::create_and_poll(
+///     client,
+///     &request,
+///     Duration::from_secs(1),
+///     Some(60),
+/// ).await?;
 /// println!("Final status: {:?}", run.status);
 /// # Ok(())
 /// # }
@@ -733,6 +801,7 @@ pub async fn create_and_poll(
     client: &FoundryClient,
     request: &CreateThreadAndRunRequest,
     poll_interval: std::time::Duration,
+    max_attempts: Option<u32>,
 ) -> FoundryResult<(Thread, Run)> {
     tracing::debug!("creating thread, run, and polling until complete");
 
@@ -743,7 +812,14 @@ pub async fn create_and_poll(
     let thread = crate::thread::get(client, &thread_id).await?;
 
     // Poll until complete
-    let final_run = poll_until_complete(client, &thread_id, &initial_run.id, poll_interval).await?;
+    let final_run = poll_until_complete(
+        client,
+        &thread_id,
+        &initial_run.id,
+        poll_interval,
+        max_attempts,
+    )
+    .await?;
 
     Ok((thread, final_run))
 }
@@ -796,24 +872,27 @@ pub async fn submit_tool_outputs(
     tool_outputs: &[ToolOutput],
 ) -> FoundryResult<Run> {
     if tool_outputs.is_empty() {
-        return Err(FoundryError::Builder("tool_outputs cannot be empty".into()));
+        return Err(FoundryError::validation("tool_outputs cannot be empty"));
     }
 
     for output in tool_outputs {
         if output.tool_call_id.trim().is_empty() {
-            return Err(FoundryError::Builder("tool_call_id cannot be empty".into()));
+            return Err(FoundryError::validation_field(
+                "tool_call_id",
+                "tool_call_id cannot be empty",
+            ));
         }
     }
 
+    FoundryClient::validate_resource_id(thread_id)?;
+    FoundryClient::validate_resource_id(run_id)?;
     tracing::debug!("submitting tool outputs");
 
     let path = format!(
         "/threads/{}/runs/{}/submit_tool_outputs?{}",
         thread_id, run_id, API_VERSION
     );
-    let request = SubmitToolOutputsRequest {
-        tool_outputs: tool_outputs.to_vec(),
-    };
+    let request = SubmitToolOutputsRequest { tool_outputs };
     let response = client.post(&path, &request).await?;
     let run = response.json::<Run>().await?;
 
@@ -843,6 +922,7 @@ pub async fn submit_tool_outputs(
 ///     "run_abc",
 ///     &outputs,
 ///     Duration::from_secs(1),
+///     Some(60),
 /// ).await?;
 /// println!("Final status: {:?}", run.status);
 /// # Ok(())
@@ -864,6 +944,7 @@ pub async fn submit_tool_outputs_and_poll(
     run_id: &str,
     tool_outputs: &[ToolOutput],
     poll_interval: Duration,
+    max_attempts: Option<u32>,
 ) -> FoundryResult<Run> {
     tracing::debug!("submitting tool outputs and polling until complete");
 
@@ -879,7 +960,7 @@ pub async fn submit_tool_outputs_and_poll(
         _ => {}
     }
 
-    poll_until_complete(client, thread_id, &run.id, poll_interval).await
+    poll_until_complete(client, thread_id, &run.id, poll_interval, max_attempts).await
 }
 
 #[cfg(test)]
@@ -946,10 +1027,9 @@ mod tests {
         let request = CreateThreadAndRunRequest::builder()
             .assistant_id("asst_abc")
             .message("Hello!")
-            .build()
-            .expect("valid request");
+            .build();
 
-        let (thread, run) = create_and_poll(&client, &request, Duration::from_millis(10))
+        let (thread, run) = create_and_poll(&client, &request, Duration::from_millis(10), None)
             .await
             .expect("should succeed");
 
@@ -985,10 +1065,7 @@ mod tests {
 
     #[test]
     fn test_run_request_serialization() {
-        let request = RunCreateRequest::builder()
-            .assistant_id("asst_abc")
-            .build()
-            .expect("valid request");
+        let request = RunCreateRequest::builder().assistant_id("asst_abc").build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -997,7 +1074,7 @@ mod tests {
 
     #[test]
     fn test_run_builder_requires_assistant_id() {
-        let result = RunCreateRequest::builder().build();
+        let result = RunCreateRequest::builder().try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1009,7 +1086,7 @@ mod tests {
         let result = RunCreateRequest::builder()
             .assistant_id("asst_abc")
             .temperature(3.0)
-            .build();
+            .try_build();
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -1038,7 +1115,38 @@ mod tests {
         assert_eq!(run.id, "run_abc123");
         assert_eq!(run.status, RunStatus::Completed);
         assert!(run.usage.is_some());
-        assert_eq!(run.usage.as_ref().unwrap().total_tokens, 150);
+        let usage = run.usage.as_ref().unwrap();
+        assert_eq!(usage.total_tokens, 150);
+        assert_eq!(usage.prompt_tokens, 100);
+        assert_eq!(usage.completion_tokens, Some(50));
+    }
+
+    #[test]
+    fn test_run_deserializes_with_core_usage_type() {
+        // Verifies that the core Usage type (with Option<u32> completion_tokens)
+        // correctly deserializes from run JSON (where completion_tokens is always present).
+        let json = serde_json::json!({
+            "id": "run_usage_test",
+            "object": "thread.run",
+            "created_at": TEST_TIMESTAMP,
+            "thread_id": "thread_xyz",
+            "assistant_id": "asst_123",
+            "status": "completed",
+            "model": "gpt-4o",
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 100,
+                "total_tokens": 300
+            }
+        });
+
+        let run: Run = serde_json::from_value(json).unwrap();
+        let usage = run.usage.expect("should have usage");
+
+        // Core Usage type wraps completion_tokens in Option
+        assert_eq!(usage.prompt_tokens, 200);
+        assert_eq!(usage.completion_tokens, Some(100));
+        assert_eq!(usage.total_tokens, 300);
     }
 
     // --- Cycle 17: Create run API tests ---
@@ -1068,10 +1176,7 @@ mod tests {
 
         let client = setup_mock_client(&server).await;
 
-        let request = RunCreateRequest::builder()
-            .assistant_id("asst_xyz")
-            .build()
-            .expect("valid request");
+        let request = RunCreateRequest::builder().assistant_id("asst_xyz").build();
 
         let run = create(&client, "thread_abc", &request)
             .await
@@ -1119,8 +1224,7 @@ mod tests {
         let request = CreateThreadAndRunRequest::builder()
             .assistant_id("asst_abc")
             .message("Hello!")
-            .build()
-            .expect("valid request");
+            .build();
 
         let json = serde_json::to_value(&request).unwrap();
 
@@ -1154,8 +1258,7 @@ mod tests {
         let request = CreateThreadAndRunRequest::builder()
             .assistant_id("asst_abc")
             .message("Hi there!")
-            .build()
-            .expect("valid request");
+            .build();
 
         let run = create_thread_and_run(&client, &request)
             .await
@@ -1197,7 +1300,7 @@ mod tests {
         assert!(run.required_action.is_some());
 
         let action = run.required_action.unwrap();
-        assert_eq!(action.action_type, "submit_tool_outputs");
+        assert_eq!(action.action_type, RequiredActionType::SubmitToolOutputs);
 
         let tool_calls = action.submit_tool_outputs.unwrap().tool_calls;
         assert_eq!(tool_calls.len(), 1);
@@ -1222,17 +1325,18 @@ mod tests {
 
     #[test]
     fn test_submit_tool_outputs_request_serialization() {
+        let outputs = [
+            ToolOutput {
+                tool_call_id: "call_1".to_string(),
+                output: "result1".to_string(),
+            },
+            ToolOutput {
+                tool_call_id: "call_2".to_string(),
+                output: "result2".to_string(),
+            },
+        ];
         let request = SubmitToolOutputsRequest {
-            tool_outputs: vec![
-                ToolOutput {
-                    tool_call_id: "call_1".to_string(),
-                    output: "result1".to_string(),
-                },
-                ToolOutput {
-                    tool_call_id: "call_2".to_string(),
-                    output: "result2".to_string(),
-                },
-            ],
+            tool_outputs: &outputs,
         };
 
         let json = serde_json::to_value(&request).unwrap();
@@ -1380,10 +1484,220 @@ mod tests {
             "run_poll",
             &outputs,
             Duration::from_millis(10),
+            None,
         )
         .await
         .expect("should succeed");
 
         assert_eq!(run.status, RunStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_poll_until_complete_respects_max_attempts() {
+        let server = MockServer::start().await;
+
+        // Always return in_progress
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_lim/runs/run_lim"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "run_lim",
+                "object": "thread.run",
+                "thread_id": "thread_lim",
+                "assistant_id": "asst_1",
+                "status": "in_progress",
+                "created_at": TEST_TIMESTAMP
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let result = poll_until_complete(
+            &client,
+            "thread_lim",
+            "run_lim",
+            Duration::from_millis(1),
+            Some(3),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("did not complete after 3 poll attempts"),
+            "Expected poll timeout message, got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_poll_until_complete_none_unlimited_completes() {
+        let server = MockServer::start().await;
+
+        // Return in_progress twice, then completed
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_u/runs/run_u"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "run_u",
+                "object": "thread.run",
+                "thread_id": "thread_u",
+                "assistant_id": "asst_1",
+                "status": "in_progress",
+                "created_at": TEST_TIMESTAMP
+            })))
+            .up_to_n_times(2)
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_u/runs/run_u"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "run_u",
+                "object": "thread.run",
+                "thread_id": "thread_u",
+                "assistant_id": "asst_1",
+                "status": "completed",
+                "created_at": TEST_TIMESTAMP
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let run = poll_until_complete(&client, "thread_u", "run_u", Duration::from_millis(1), None)
+            .await
+            .expect("should complete");
+
+        assert_eq!(run.status, RunStatus::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_get_run_rejects_path_traversal() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let result = get(&client, "../evil", "run_123").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+    }
+
+    // =======================================================================
+    // M3: Stringly-typed enums (R1 + R2 + R3)
+    // =======================================================================
+
+    // --- R1: RequiredActionType enum ---
+
+    #[test]
+    fn test_required_action_type_deserialization() {
+        let json = serde_json::json!({
+            "type": "submit_tool_outputs",
+            "submit_tool_outputs": {
+                "tool_calls": []
+            }
+        });
+        let action: RequiredAction = serde_json::from_value(json).unwrap();
+        assert_eq!(action.action_type, RequiredActionType::SubmitToolOutputs);
+    }
+
+    #[test]
+    fn test_tool_call_type_in_run_deserialization() {
+        let json = serde_json::json!({
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "foo", "arguments": "{}"}
+        });
+        let tc: ToolCall = serde_json::from_value(json).unwrap();
+        assert_eq!(tc.call_type, crate::run_step::ToolCallType::Function);
+    }
+
+    // --- R3: InitialMessage uses MessageRole ---
+
+    #[test]
+    fn test_initial_message_serializes_role_as_string() {
+        let msg = InitialMessage {
+            role: crate::message::MessageRole::User,
+            content: "hello".into(),
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["role"], "user");
+    }
+
+    // --- M4 R7: Poll timeout uses Validation, not Api ---
+
+    #[tokio::test]
+    async fn test_poll_timeout_returns_validation_error() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/threads/thread_val/runs/run_val"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "run_val",
+                "object": "thread.run",
+                "thread_id": "thread_val",
+                "assistant_id": "asst_1",
+                "status": "in_progress",
+                "created_at": TEST_TIMESTAMP
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+
+        let result = poll_until_complete(
+            &client,
+            "thread_val",
+            "run_val",
+            Duration::from_millis(1),
+            Some(2),
+        )
+        .await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                err,
+                azure_ai_foundry_core::error::FoundryError::Validation { .. }
+            ),
+            "Expected Validation error, got: {:?}",
+            err
+        );
+        assert!(err
+            .to_string()
+            .contains("did not complete after 2 poll attempts"));
+    }
+
+    // --- Cycle 6.3: Display for RunStatus ---
+
+    #[test]
+    fn test_run_status_display_matches_serde() {
+        let pairs = [
+            (RunStatus::Queued, "queued"),
+            (RunStatus::InProgress, "in_progress"),
+            (RunStatus::RequiresAction, "requires_action"),
+            (RunStatus::Cancelling, "cancelling"),
+            (RunStatus::Cancelled, "cancelled"),
+            (RunStatus::Failed, "failed"),
+            (RunStatus::Completed, "completed"),
+            (RunStatus::Incomplete, "incomplete"),
+            (RunStatus::Expired, "expired"),
+        ];
+        for (status, expected) in pairs {
+            assert_eq!(
+                status.to_string(),
+                expected,
+                "Display mismatch for {:?}",
+                status
+            );
+        }
     }
 }

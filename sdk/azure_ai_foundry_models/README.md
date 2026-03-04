@@ -21,8 +21,8 @@ Model inference client for the Azure AI Foundry Rust SDK — chat completions, e
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.6"
-azure_ai_foundry_models = "0.6"
+azure_ai_foundry_core = "0.7"
+azure_ai_foundry_models = "0.7"
 tokio = { version = "1", features = ["full"] }
 ```
 
