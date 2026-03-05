@@ -37,8 +37,8 @@ Add the dependencies to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-azure_ai_foundry_core = "0.7"
-azure_ai_foundry_models = "0.7"
+azure_ai_foundry_core = "0.8"
+azure_ai_foundry_models = "0.8"
 tokio = { version = "1", features = ["full"] }
 ```
 

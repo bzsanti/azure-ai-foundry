@@ -15,7 +15,7 @@ documentation = "https://docs.rs/azure_ai_foundry_tools"
 workspace = true
 
 [dependencies]
-azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.7.0" }
+azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.8.0" }
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
@@ -24,7 +24,7 @@ tracing.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.7.0", features = ["test-support"] }
+azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.8.0", features = ["test-support"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock.workspace = true
 tracing-test = "0.2"

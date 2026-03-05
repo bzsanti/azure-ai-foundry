@@ -5,10 +5,11 @@ members = [
     "sdk/azure_ai_foundry_models",
     "sdk/azure_ai_foundry_agents",
     "sdk/azure_ai_foundry_tools",
+    "sdk/azure_ai_foundry_safety",
 ]
 
 [workspace.package]
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
