@@ -26,10 +26,10 @@ An **unofficial** Rust SDK for [Microsoft Foundry](https://azure.microsoft.com/e
 | [`azure_ai_foundry_models`](./sdk/azure_ai_foundry_models) | Chat completions, embeddings, audio, images | ✅ Released |
 | [`azure_ai_foundry_agents`](./sdk/azure_ai_foundry_agents) | Agent Service (threads, runs, vector stores) | ✅ Released |
 | [`azure_ai_foundry_tools`](./sdk/azure_ai_foundry_tools) | Vision, Document Intelligence | ✅ Released |
-| `azure_ai_foundry_safety` | Content Safety, Prompt Shields | 📋 Planned (v0.7.0) |
-| `azure_ai_foundry_language` | Text analytics, translation, PII | 📋 Planned (v0.8.0) |
-| `azure_ai_foundry_speech` | Speech-to-text, text-to-speech | 📋 Planned (v0.9.0) |
-| `azure_ai_foundry_realtime` | Realtime voice (WebSocket/WebRTC) | 📋 Planned (v0.12.0) |
+| `azure_ai_foundry_safety` | Content Safety, Prompt Shields | 📋 Planned (v0.8.0) |
+| `azure_ai_foundry_language` | Text analytics, translation, PII | 📋 Planned (v0.9.0) |
+| `azure_ai_foundry_speech` | Speech-to-text, text-to-speech | 📋 Planned (v0.10.0) |
+| `azure_ai_foundry_realtime` | Realtime voice (WebSocket/WebRTC) | 📋 Planned (v0.13.0) |
 
 ## Quick Start
 
@@ -126,15 +126,24 @@ export AZURE_AI_FOUNDRY_API_KEY="your-key"  # Falls back to Entra ID if not set
 - [x] `post_multipart()` and `get_bytes()` on FoundryClient
 - [x] 451 tests passing
 
-### v0.6.0 — Models: Audio & Images
-- [ ] Audio transcription (Whisper STT)
-- [ ] Audio translation
-- [ ] Text-to-speech synthesis
-- [ ] Image generation (DALL-E, gpt-image-1)
-- [ ] Image editing
-- [ ] Responses API (`POST /responses`, `GET /responses/{id}`)
+### v0.6.0 ✅
+- [x] Audio transcription (Whisper STT)
+- [x] Audio translation
+- [x] Text-to-speech synthesis
+- [x] Image generation (DALL-E, gpt-image-1)
+- [x] Image editing
+- [x] Responses API (`POST /responses`, `GET /responses/{id}`)
+- [x] 581 tests passing
 
-### v0.7.0 — Content Safety
+### v0.7.0 ✅
+- [x] Quality refactor — 4 rounds, 52 findings resolved
+- [x] Critical fix: UTF-8 boundary panic in `truncate_message`
+- [x] Typed enums replacing stringly-typed fields across all crates
+- [x] `bytes::Bytes` migration for zero-copy in audio/image/file requests
+- [x] Percent-encoding, validation hardening, `Display` impls
+- [x] 705 tests passing
+
+### v0.8.0 — Content Safety
 New crate: `azure_ai_foundry_safety`
 - [ ] Text content analysis (hate, violence, sexual, self-harm)
 - [ ] Image content analysis
@@ -144,7 +153,7 @@ New crate: `azure_ai_foundry_safety`
 - [ ] Blocklist management (CRUD + items)
 - [ ] Custom categories (standard + rapid)
 
-### v0.8.0 — Language & Translation
+### v0.9.0 — Language & Translation
 New crate: `azure_ai_foundry_language`
 - [ ] Text analytics (sentiment, NER, key phrases, language detection)
 - [ ] PII detection and redaction
@@ -154,7 +163,7 @@ New crate: `azure_ai_foundry_language`
 - [ ] Text translation (translate, transliterate, detect, dictionary)
 - [ ] Document batch translation
 
-### v0.9.0 — Speech
+### v0.10.0 — Speech
 New crate: `azure_ai_foundry_speech`
 - [ ] Real-time speech-to-text
 - [ ] Fast transcription (synchronous)
@@ -162,21 +171,21 @@ New crate: `azure_ai_foundry_speech`
 - [ ] Text-to-speech (SSML)
 - [ ] Voice listing
 
-### v0.10.0 — Advanced Models & Batch
+### v0.11.0 — Advanced Models & Batch
 - [ ] Batch API (create, list, get, cancel)
 - [ ] Fine-tuning jobs (create, list, get, cancel, pause, resume, events, checkpoints)
 - [ ] Model listing and retrieval
 - [ ] Files API for OpenAI endpoint (upload, list, get, delete, content)
 - [ ] Evaluations API (evals, runs, output items)
 
-### v0.11.0 — Content Understanding & Extended Tools
+### v0.12.0 — Content Understanding & Extended Tools
 - [ ] Content Understanding API (multimodal: documents, images, audio, video)
 - [ ] Document Intelligence: custom model build/compose/copy/delete
 - [ ] Document Intelligence: classifiers
 - [ ] Vision: image/text vectorization endpoints
 - [ ] Face API (detect, verify, identify, person groups)
 
-### v0.12.0 — Realtime
+### v0.13.0 — Realtime
 New crate: `azure_ai_foundry_realtime`
 - [ ] Realtime API via WebSocket (voice conversations)
 - [ ] Voice Live API via WebSocket (agent voice)
