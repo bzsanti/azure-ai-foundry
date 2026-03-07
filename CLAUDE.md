@@ -139,9 +139,9 @@ When implementing:
 - Each test should test ONE behavior
 - Tests must be independent and isolated
 
-## Session Status (2026-03-05)
+## Session Status (2026-03-08)
 
-**All versions through v0.7.0: RELEASED**
+**All versions through v0.8.0: RELEASED**
 
 Published to crates.io (latest: v0.7.0):
 - https://crates.io/crates/azure_ai_foundry_core/0.7.0
@@ -149,24 +149,14 @@ Published to crates.io (latest: v0.7.0):
 - https://crates.io/crates/azure_ai_foundry_agents/0.7.0
 - https://crates.io/crates/azure_ai_foundry_tools/0.7.0
 
-**v0.8.0 Status:** IMPLEMENTATION COMPLETE + QUALITY REVIEW DONE (branch `feature/0.8.0`)
-- New crate: `azure_ai_foundry_safety` (Content Safety, Prompt Shields, Blocklists)
+**v0.8.0: RELEASED** (2026-03-08, tagged `v0.8.0`, GitHub release created)
+- New crate: `azure_ai_foundry_safety` (Content Safety API v2024-09-01)
 - `FoundryClient::patch` method added to core
-- Version bumped to 0.8.0 across all crates
-- Quality review completed: 10 findings (2 critical, 5 recommended, 3 optional)
-- TDD plan for all findings persisted in `.claude/plan.md`
-- Pending: Implement quality fixes, CHANGELOG update, PR, merge to main
-
-**v0.8.0 Highlights:**
-- Text content analysis (hate, violence, sexual, self-harm) with configurable severity levels
-- Image content analysis (base64 or blob URL input)
-- Prompt Shields (jailbreak and injection detection)
-- Protected material detection (copyrighted content)
-- Blocklist CRUD (create/update via PATCH, get, delete, list)
-- Blocklist items (add/update, get, list, remove)
-- `FoundryClient::patch` for PATCH requests with `application/merge-patch+json`
+- 2 quality rounds completed (21 findings resolved via TDD)
+- PR #25 merged to main
+- Pending: Publish v0.8.0 to crates.io
 
 **Test summary (v0.8.0):**
-- 795 tests passing (154 agents + 228 models + 152 core + 82 safety + 65 tools + 114 doc-tests)
+- 818 tests passing (154 agents + 228 models + 152 core + 104 safety + 65 tools + 115 doc-tests)
 - All clippy checks passing (0 warnings)
 - All formatting checks passing
