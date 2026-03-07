@@ -1,6 +1,6 @@
 [package]
-name = "azure_ai_foundry_models"
-description = "Chat completions, embeddings, audio, images, and Responses API for Azure AI Foundry - Rust SDK"
+name = "azure_ai_foundry_safety"
+description = "Content Safety client for Azure AI Foundry - Rust SDK"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-documentation = "https://docs.rs/azure_ai_foundry_models"
+documentation = "https://docs.rs/azure_ai_foundry_safety"
 
 [lints]
 workspace = true
@@ -19,15 +19,14 @@ azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.8.0" }
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true
-futures.workspace = true
-tokio-stream.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-bytes.workspace = true
-memchr = "2"
 
 [dev-dependencies]
 azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.8.0", features = ["test-support"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
 wiremock.workspace = true
 tracing-test = "0.2"
+
+[features]
+integration-tests = []

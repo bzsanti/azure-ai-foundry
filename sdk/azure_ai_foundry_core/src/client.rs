@@ -472,6 +472,56 @@ impl FoundryClient {
         .await
     }
 
+    /// Send a PATCH request with a JSON body using `application/merge-patch+json` content type.
+    ///
+    /// Uses [RFC 7396 Merge Patch](https://tools.ietf.org/html/rfc7396) semantics as required
+    /// by Azure REST API conventions for PATCH operations.
+    /// Automatically adds authentication headers and API version.
+    /// Retries on retriable HTTP errors (429, 500, 502, 503, 504) with exponential backoff.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The API path to request.
+    /// * `body` - The request body to serialize as JSON.
+    ///
+    /// # Tracing
+    ///
+    /// This method emits a span named `foundry::client::patch` with the following fields:
+    /// - `path`: The API path being requested
+    /// - `attempt`: Current retry attempt (0-indexed)
+    /// - `status_code`: HTTP status code of the response
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if authentication fails, serialization fails,
+    /// the request fails after all retries, or the server returns a non-retriable error.
+    #[tracing::instrument(
+        name = "foundry::client::patch",
+        skip(self, body),
+        fields(path = %path, attempt, status_code)
+    )]
+    pub async fn patch<T: serde::Serialize>(
+        &self,
+        path: &str,
+        body: &T,
+    ) -> FoundryResult<reqwest::Response> {
+        let url = self.url(path)?;
+        tracing::debug!("sending PATCH request");
+
+        let json_body = serde_json::to_vec(body)?;
+
+        self.execute_with_retry(|auth| {
+            self.http
+                .patch(url.clone())
+                .header("Authorization", auth)
+                .header("api-version", &self.api_version)
+                .header("Content-Type", "application/merge-patch+json")
+                .body(json_body.clone())
+                .send()
+        })
+        .await
+    }
+
     /// Send a POST request for streaming responses.
     ///
     /// Unlike [`Self::post`], this method does not consume the response body
@@ -2969,5 +3019,88 @@ mod tests {
         let msg = "x".repeat(FoundryClient::MAX_ERROR_MESSAGE_LEN + 1);
         let result = FoundryClient::truncate_message(&msg);
         assert!(result.ends_with("... (truncated)"));
+    }
+
+    // -----------------------------------------------------------------------
+    // PATCH method tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn patch_request_success() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/test/patch-endpoint"))
+            .and(header("Authorization", "Bearer test-api-key"))
+            .and(header("api-version", "2025-01-01-preview"))
+            .and(header("Content-Type", "application/merge-patch+json"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"name": "updated"})),
+            )
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+        let body = serde_json::json!({"description": "new description"});
+        let response = client
+            .patch("/test/patch-endpoint", &body)
+            .await
+            .expect("should succeed");
+
+        assert_eq!(response.status(), 200);
+        let result: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(result["name"], "updated");
+    }
+
+    #[tokio::test]
+    async fn patch_request_error_propagation() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/test/patch-endpoint"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+                "error": {
+                    "code": "NotFound",
+                    "message": "Resource not found"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+        let body = serde_json::json!({"description": "test"});
+        let result = client.patch("/test/patch-endpoint", &body).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            FoundryError::Api { code, message } => {
+                assert_eq!(code, "NotFound");
+                assert_eq!(message, "Resource not found");
+            }
+            _ => panic!("Expected Api error, got {:?}", err),
+        }
+    }
+
+    #[tokio::test]
+    async fn patch_sends_merge_patch_content_type() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/test/patch-ct"))
+            .and(header("Content-Type", "application/merge-patch+json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+        let body = serde_json::json!({"name": "test"});
+        let response = client
+            .patch("/test/patch-ct", &body)
+            .await
+            .expect("should succeed with merge-patch content type");
+
+        assert_eq!(response.status(), 200);
     }
 }

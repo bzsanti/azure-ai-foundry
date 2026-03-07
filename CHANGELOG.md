@@ -7,6 +7,127 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-03-08
+
+### Added
+
+#### New Crate: `azure_ai_foundry_safety` (Content Safety API v2024-09-01)
+
+**Text Content Analysis**
+- `analyze_text()` — detect harmful content (hate, self-harm, sexual, violence)
+- `AnalyzeTextRequest` builder with categories, blocklist names, halt-on-blocklist, output type
+- Configurable severity output: `FourSeverityLevels` or `EightSeverityLevels`
+- Maximum text length validation (10,000 Unicode code points)
+
+**Image Content Analysis**
+- `analyze_image()` — detect harmful content in images
+- `AnalyzeImageRequest` builder with base64 content or Azure Blob URL input
+- `has_base64_content()` / `has_blob_url()` accessors
+
+**Prompt Shields**
+- `shield_prompt()` — detect jailbreak and injection attacks
+- `ShieldPromptRequest` builder with user prompt and optional documents
+
+**Protected Material Detection**
+- `detect_protected_material()` — detect copyrighted content (lyrics, articles, code)
+- `ProtectedMaterialRequest` builder with text length validation
+
+**Blocklist Management (CRUD)**
+- `create_or_update_blocklist()` — create/update via PATCH with `application/merge-patch+json`
+- `get_blocklist()`, `list_blocklists()`, `delete_blocklist()`
+- `add_or_update_blocklist_items()`, `get_blocklist_item()`, `list_blocklist_items()`
+- `remove_blocklist_items()` — accepts `impl IntoIterator<Item = impl AsRef<str>>`
+- `BlocklistUpsertRequest` builder (body contains description only; name is a URL path parameter)
+- `BlocklistItemInput` builder with text, description, is_regex fields
+- Paginated list responses with `next_link` for cursor-based navigation
+
+**Shared Types**
+- `HarmCategory` enum (Hate, SelfHarm, Sexual, Violence)
+- `OutputType` enum (FourSeverityLevels, EightSeverityLevels)
+- `ImageOutputType` enum (`#[non_exhaustive]`, FourSeverityLevels)
+- `CategoryAnalysis` with category and severity fields
+- All request/response types derive `PartialEq, Eq`
+
+**Validation**
+- Client-side max-length enforcement: text (10,000), blocklist name (64), description (1,024), item text (128)
+- All length errors use `FoundryError::Validation` (not `Builder`)
+- Name validation order: resource ID check before iterator consumption
+- Centralized limit constants in `models.rs`
+
+**Core Crate Enhancement**
+- `FoundryClient::patch()` method for PATCH requests with `application/merge-patch+json`
+- Serialization errors use `FoundryError::Serialization` (was incorrectly `Api`)
+
+**Quality**
+- Builder methods accept `impl IntoIterator` (categories, blocklist_names, documents)
+- `api-version=2024-09-01` query parameter verified by tests in every module
+- Tracing instrumentation on all API functions with `foundry::safety::*` spans
+- 104 unit tests + 6 doc-tests in the safety crate
+- 818 total workspace tests
+
+## [0.7.0] - 2026-03-04
+
+### Changed
+
+#### Quality Refactor — 4 Rounds (52 findings resolved)
+
+**Round 1 — Foundation quality (M1-M7)**
+- `FoundryError::Validation` variant for runtime validation errors
+- Workspace-level Clippy lints (`unsafe_code=deny`, `clippy::all=warn`)
+- Removed panic paths in `auth.rs` and `client.rs`
+- Optimized `sanitize_error_message` (O(n) instead of O(n²))
+- URL path injection validation for all resource IDs
+- Extracted `execute_with_retry` to eliminate retry loop duplication (~350 lines removed)
+- `poll_until_complete` accepts `max_attempts: Option<u32>`
+- Removed `Clone` from audio/image request types with `Vec<u8>` data
+- `file::upload` uses `impl Into<bytes::Bytes>` for zero-copy
+- `stop()` builder methods accept `impl IntoIterator`
+- `Display` impls for `RunStatus`, `VectorStoreStatus`
+- `ResponseMessage::role` typed as `Role` enum
+- `Debug` on all model builders (manual impl for byte-holding builders)
+- Borrowed `DocumentAnalysisBody<'a>` to avoid clones
+- Standardized `build()` / `try_build()` across all builders
+- Unified `RunUsage` with `azure_ai_foundry_core::models::Usage`
+
+**Round 2 — Deep quality fixes (M1-M6, 12 findings)**
+- Audio bytes migration (`TranscriptionRequest`/`TranslationRequest` → `bytes::Bytes`)
+- File upload zero-copy (`Part::stream_with_length` instead of `to_vec()`)
+- Stringly-typed enums replaced: `RequiredActionType`, `ToolType`, `ToolCallType`, `MessageRole`
+- Poll timeout returns `FoundryError::Validation` instead of `Api`
+- `Display` impls for `RunStepStatus`, `StepType`
+- Uniform empty-string validation (`trim().is_empty()`) across all builders
+
+**Round 3 — 18 findings (M1-M8)**
+- Field `n` → `count` with serde rename in image requests
+- Doc comments on `EmbeddingData`, `ResponseUsage`, `OUTPUT_TEXT_TYPE` (now `pub const`)
+- `AgentUpdateRequest` rejects all-None (Validation error)
+- `Display` for `FilePurpose` and `AudioResponseFormat`
+- Doc lifetime note on `fetch_fresh_token_with_options`
+- Replaced `unreachable!()` with explicit error in `execute_with_retry`
+
+**Round 4 — 11 findings (M1-M12)**
+- **Critical fix**: UTF-8 boundary panic in `truncate_message`
+- Query params percent-encoding in tools crate (vision + document intelligence)
+- `previous_response_id` empty/whitespace validation
+- `ImageEditRequest` `Vec<u8>` → `bytes::Bytes` migration (O(1) clone for retries)
+- `FileObject.status` → `FileStatus` typed enum with `#[serde(other)]`
+- `ResponseOutput.output_type` → `ResponseOutputType` typed enum
+- `ResponseContent.content_type` → `ResponseContentType` typed enum
+- `EmbeddingData` added `object` field for API parity
+- `RetryPolicy::new` error variant `Builder` → `Validation`
+- `Role` enum added `Hash` derive
+- `FileList.has_more` pagination cursor documentation with example
+
+### Breaking Changes
+- `ImageEditRequest.image` / `.mask`: `Vec<u8>` → `bytes::Bytes`
+- `FileObject.status`: `Option<String>` → `Option<FileStatus>`
+- `ResponseOutput.output_type`: `String` → `ResponseOutputType`
+- `ResponseContent.content_type`: `String` → `ResponseContentType`
+- `EmbeddingData`: new required field `object: String`
+- `RetryPolicy::new` returns `FoundryError::Validation` (was `Builder`)
+- Image request field `n` renamed to `count` (serde alias preserves JSON compatibility)
+- `RunUsage` removed in favor of `azure_ai_foundry_core::models::Usage`
+
 ## [0.6.0] - 2026-03-01
 
 ### Added
@@ -201,7 +322,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - API keys wrapped with `secrecy` crate to prevent accidental logging
 - Error message truncation to prevent sensitive data leakage
 
-[Unreleased]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/bzsanti/azure-ai-foundry/compare/v0.3.0...v0.4.0
