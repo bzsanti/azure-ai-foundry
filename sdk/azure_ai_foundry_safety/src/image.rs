@@ -15,7 +15,7 @@ use crate::models::{CategoryAnalysis, HarmCategory, ImageOutputType, CONTENT_SAF
 // ---------------------------------------------------------------------------
 
 /// Image source for content analysis — either base64-encoded content or a blob URL.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct ImageSource {
     #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<String>,
@@ -25,7 +25,7 @@ struct ImageSource {
 }
 
 /// Request body for the image content analysis endpoint.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnalyzeImageRequest {
     image: ImageSource,
 
@@ -40,6 +40,16 @@ impl AnalyzeImageRequest {
     /// Creates a new builder for `AnalyzeImageRequest`.
     pub fn builder() -> AnalyzeImageRequestBuilder {
         AnalyzeImageRequestBuilder::default()
+    }
+
+    /// Returns whether this request uses base64 content.
+    pub fn has_base64_content(&self) -> bool {
+        self.image.content.is_some()
+    }
+
+    /// Returns whether this request uses a blob URL.
+    pub fn has_blob_url(&self) -> bool {
+        self.image.blob_url.is_some()
     }
 }
 
@@ -66,12 +76,15 @@ impl AnalyzeImageRequestBuilder {
     }
 
     /// Sets the harm categories to analyze. If not set, all categories are analyzed.
-    pub fn categories(mut self, categories: Vec<HarmCategory>) -> Self {
-        self.categories = Some(categories);
+    pub fn categories(mut self, categories: impl IntoIterator<Item = HarmCategory>) -> Self {
+        self.categories = Some(categories.into_iter().collect());
         self
     }
 
-    /// Sets the output type (only `FourSeverityLevels` is supported for images).
+    /// Sets the output type for image analysis.
+    ///
+    /// Currently only `FourSeverityLevels` is supported by the API.
+    /// This field is optional and defaults to `FourSeverityLevels` when omitted.
     pub fn output_type(mut self, output_type: ImageOutputType) -> Self {
         self.output_type = Some(output_type);
         self
@@ -121,7 +134,7 @@ impl AnalyzeImageRequestBuilder {
 // ---------------------------------------------------------------------------
 
 /// Response from the image content analysis endpoint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct AnalyzeImageResponse {
     /// Analysis results per harm category.
     #[serde(rename = "categoriesAnalysis")]
@@ -194,7 +207,7 @@ pub async fn analyze_image(
 mod tests {
     use super::*;
     use crate::test_utils::setup_mock_client;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // -- Builder validation --
@@ -269,7 +282,7 @@ mod tests {
     fn test_analyze_image_serializes_base64_content() {
         let request = AnalyzeImageRequest::builder()
             .base64_content("aGVsbG8=")
-            .categories(vec![HarmCategory::Violence])
+            .categories([HarmCategory::Violence])
             .build();
 
         let json = serde_json::to_value(&request).expect("should serialize");
@@ -374,5 +387,67 @@ mod tests {
 
         let _ = analyze_image(&client, &request).await;
         assert!(logs_contain("foundry::safety::analyze_image"));
+    }
+
+    #[test]
+    fn test_analyze_image_categories_accepts_array() {
+        let request = AnalyzeImageRequest::builder()
+            .blob_url("https://example.com/img.jpg")
+            .categories([HarmCategory::Hate, HarmCategory::Violence])
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["categories"], serde_json::json!(["Hate", "Violence"]));
+    }
+
+    #[test]
+    fn test_analyze_image_output_type_absent_by_default() {
+        let request = AnalyzeImageRequest::builder()
+            .blob_url("https://example.com/img.jpg")
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(
+            json.get("outputType").is_none(),
+            "outputType should be absent by default"
+        );
+    }
+
+    #[test]
+    fn test_analyze_image_request_accessors() {
+        let blob_request = AnalyzeImageRequest::builder()
+            .blob_url("https://example.com/img.jpg")
+            .build();
+        assert!(blob_request.has_blob_url());
+        assert!(!blob_request.has_base64_content());
+
+        let base64_request = AnalyzeImageRequest::builder()
+            .base64_content("aGVsbG8=")
+            .build();
+        assert!(base64_request.has_base64_content());
+        assert!(!base64_request.has_blob_url());
+    }
+
+    #[tokio::test]
+    async fn test_analyze_image_sends_api_version_query_param() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        Mock::given(method("POST"))
+            .and(path("/contentsafety/image:analyze"))
+            .and(query_param("api-version", "2024-09-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "categoriesAnalysis": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let request = AnalyzeImageRequest::builder()
+            .blob_url("https://example.com/img.jpg")
+            .build();
+        let result = analyze_image(&client, &request).await;
+        assert!(
+            result.is_ok(),
+            "request should match with api-version query param"
+        );
     }
 }

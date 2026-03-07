@@ -1,215 +1,100 @@
-# TDD Plan: v0.8.0 Quality Review Fixes
+# TDD Plan: v0.8.0 Quality Review Round 2
 
 ## Context
 
-Quality review of `azure_ai_foundry_safety` crate identified 10 findings across 3 priority levels.
-This plan covers all findings using strict TDD methodology (RED → GREEN → REFACTOR).
+Second quality review of `azure_ai_foundry_safety` crate identified 11 findings (2 critical, 6 recommended, 3 optional).
+This plan covers all findings using strict TDD methodology (RED -> GREEN -> REFACTOR).
 
 **Branch**: `feature/0.8.0`
-**Baseline tests**: 795 (154 agents + 228 models + 152 core + 82 safety + 65 tools + 114 doc-tests)
+**Baseline tests**: 808 (154 agents + 228 models + 153 core + 94 safety + 65 tools + 114 doc-tests)
 
 ---
 
-## Finding 1 (Critical): `patch` method uses manual serialization
+## Execution Order (dependency graph)
 
-**File**: `sdk/azure_ai_foundry_core/src/client.rs:511-514`
-**Problem**: `patch()` uses `serde_json::to_vec(body)` + manual `Content-Type` header + `FoundryError::Api` for serialization errors, while `post()` uses `.json(body)` (reqwest handles serialization + content-type automatically). The `patch` method should use `.json(body)` but override Content-Type to `application/merge-patch+json`.
-**Risk**: Inconsistent error types for serialization failures, extra allocation from `to_vec` + `clone`.
+```
+F8 (centralize constants in models.rs)
+ |
+ +-> F3 (description validation in BlocklistItemInput — uses constants from F8)
+ |
+ +-> F1 (remove blocklist_name from body — uses constants from F8)
+      |
+      +-> F6 (reorder validation in remove_blocklist_items — same file, same context)
 
-### Cycle 1.1: RED — test that patch sends correct Content-Type header
-- File: `sdk/azure_ai_foundry_core/src/client.rs` (test module)
-- Test: `test_patch_sends_merge_patch_content_type`
-  - Use wiremock `header("Content-Type", "application/merge-patch+json")` matcher
-  - If the implementation changes to `.json(body)`, reqwest sets `application/json` by default
-  - So the test must verify the final Content-Type is `application/merge-patch+json`
-- Expected: test passes with current implementation (this is a regression guard)
+F2 (remove encode_query_value + url dep — independent)
 
-### Cycle 1.2: GREEN — refactor `patch` to use `.json(body)` with Content-Type override
-- Replace:
-  ```rust
-  let json_body = serde_json::to_vec(body).map_err(|e| FoundryError::Api { ... })?;
-  // ...
-  .header("Content-Type", "application/merge-patch+json")
-  .body(json_body.clone())
-  ```
-- With:
-  ```rust
-  .json(body)
-  .header("Content-Type", "application/merge-patch+json")
-  ```
-  Note: `.json(body)` sets Content-Type to `application/json`, then `.header()` overrides it.
-- Remove the `serde_json::to_vec` block entirely
-- Existing tests must still pass
+F4+F11 (api-version query param tests — independent)
 
-### Cycle 1.3: REFACTOR — verify clippy + fmt
-- `cargo clippy -p azure_ai_foundry_core -- -D warnings`
-- `cargo fmt --all -- --check`
-- Existing `test_patch_request_success` and `test_patch_request_error_propagation` must pass
+F5 (traced_test for blocklist — independent)
 
-**Tests added**: 1 new + 2 existing = 3 total covering patch
+F7 (#[non_exhaustive] on ImageOutputType — independent)
+
+F9 (doc next_link — independent)
+
+F10 (PartialEq/Eq derives — independent)
+```
+
+**Order**: F8 -> F3 -> F1 -> F6 -> F2 -> F4+F11 -> F5 -> F7 -> F9 -> F10
 
 ---
 
-## Finding 2 (Critical): MAX_TEXT_LENGTH errors use wrong error variant
+## F8 — Centralize limit constants in models.rs
 
-**Files**:
-- `sdk/azure_ai_foundry_safety/src/text.rs:98` — `FoundryError::Builder` for text too long
-- `sdk/azure_ai_foundry_safety/src/protected_material.rs:58` — same issue
+**Problem**: `MAX_TEXT_LENGTH` duplicated between `text.rs:13` and `protected_material.rs:13`. Blocklist constants are local to `try_build` bodies.
+**Files**: `models.rs`, `text.rs`, `protected_material.rs`, `blocklist.rs`
 
-**Problem**: Text length exceeding `MAX_TEXT_LENGTH` is a **runtime data validation** error (the user provided valid builder config but invalid data), not a builder configuration error. Should use `FoundryError::Validation { field, message }`.
-
-### Cycle 2.1: RED — test that text too long returns Validation error
-- File: `sdk/azure_ai_foundry_safety/src/text.rs`
-- Modify existing `test_analyze_text_rejects_text_too_long`:
+### Cycle 8.1: RED — test constants exist in models.rs
+- File: `sdk/azure_ai_foundry_safety/src/models.rs`
+- Test: `test_limit_constants`
   ```rust
-  let err = result.expect_err("should reject long text");
-  assert!(matches!(err, FoundryError::Validation { .. }), "error: {err}");
+  assert_eq!(MAX_TEXT_LENGTH, 10_000);
+  assert_eq!(MAX_BLOCKLIST_NAME_LENGTH, 64);
+  assert_eq!(MAX_DESCRIPTION_LENGTH, 1_024);
+  assert_eq!(MAX_ITEM_TEXT_LENGTH, 128);
   ```
-- Expected: FAILS (current code returns `FoundryError::Builder`)
+- Expected: FAILS (constants don't exist in models.rs)
 
-### Cycle 2.2: GREEN — change text.rs to use Validation
-- File: `sdk/azure_ai_foundry_safety/src/text.rs:97-100`
-- Replace:
+### Cycle 8.2: GREEN — add constants to models.rs
+- File: `sdk/azure_ai_foundry_safety/src/models.rs`
   ```rust
-  return Err(FoundryError::Builder(format!(...)));
-  ```
-- With:
-  ```rust
-  return Err(FoundryError::validation(format!(
-      "text exceeds maximum length of {MAX_TEXT_LENGTH} characters"
-  )));
+  pub(crate) const MAX_TEXT_LENGTH: usize = 10_000;
+  pub(crate) const MAX_BLOCKLIST_NAME_LENGTH: usize = 64;
+  pub(crate) const MAX_DESCRIPTION_LENGTH: usize = 1_024;
+  pub(crate) const MAX_ITEM_TEXT_LENGTH: usize = 128;
   ```
 
-### Cycle 2.3: RED — same fix for protected_material.rs
-- File: `sdk/azure_ai_foundry_safety/src/protected_material.rs`
-- Modify `test_protected_material_rejects_text_too_long`:
-  ```rust
-  assert!(matches!(err, FoundryError::Validation { .. }), "error: {err}");
-  ```
-- Expected: FAILS
+### Cycle 8.3: REFACTOR — remove local constants, update imports
+- `text.rs`: remove line 13 `const MAX_TEXT_LENGTH`, add to `use crate::models::{..., MAX_TEXT_LENGTH}`
+- `protected_material.rs`: remove line 13 `const MAX_TEXT_LENGTH`, add to `use crate::models::{..., MAX_TEXT_LENGTH}`
+- `blocklist.rs`: remove `const MAX_BLOCKLIST_NAME_LENGTH/MAX_DESCRIPTION_LENGTH/MAX_ITEM_TEXT_LENGTH` from inside `try_build` bodies, add to `use crate::models::{..., MAX_BLOCKLIST_NAME_LENGTH, MAX_DESCRIPTION_LENGTH, MAX_ITEM_TEXT_LENGTH}`
+- Verify: all existing tests pass unchanged
 
-### Cycle 2.4: GREEN — change protected_material.rs
-- File: `sdk/azure_ai_foundry_safety/src/protected_material.rs:57-60`
-- Same pattern as text.rs
-
-### Cycle 2.5: REFACTOR
-- Verify all existing tests still pass
-- `cargo test -p azure_ai_foundry_safety`
-
-**Tests modified**: 2 (strengthened assertions)
+**Tests**: +1 new
 
 ---
 
-## Finding 3 (Recommended): Builders accept `Vec<T>` instead of `impl IntoIterator`
+## F3 — Description max-length validation in BlocklistItemInput
 
-**Files**:
-- `sdk/azure_ai_foundry_safety/src/text.rs:67` — `categories(Vec<HarmCategory>)`
-- `sdk/azure_ai_foundry_safety/src/text.rs:73` — `blocklist_names(Vec<String>)`
-- `sdk/azure_ai_foundry_safety/src/image.rs:69` — `categories(Vec<HarmCategory>)`
-- `sdk/azure_ai_foundry_safety/src/prompt_shields.rs:53` — `documents(Vec<String>)`
-
-**Problem**: Accepting `Vec<T>` forces callers to allocate a Vec even when they have an iterator, array, or slice. The pattern `impl IntoIterator<Item = T>` is more ergonomic and consistent with the agents/models crates.
-
-### Cycle 3.1: RED — test that categories accepts arrays (not just Vec)
-- File: `sdk/azure_ai_foundry_safety/src/text.rs`
-- New test: `test_analyze_text_categories_accepts_array`
-  ```rust
-  let request = AnalyzeTextRequest::builder()
-      .text("test")
-      .categories([HarmCategory::Hate, HarmCategory::Violence])
-      .build();
-  let json = serde_json::to_value(&request).unwrap();
-  assert_eq!(json["categories"], serde_json::json!(["Hate", "Violence"]));
-  ```
-- Expected: FAILS (array is not `Vec<HarmCategory>`)
-
-### Cycle 3.2: GREEN — change text.rs builders to accept IntoIterator
-- `text.rs:67`:
-  ```rust
-  pub fn categories(mut self, categories: impl IntoIterator<Item = HarmCategory>) -> Self {
-      self.categories = Some(categories.into_iter().collect());
-      self
-  }
-  ```
-- `text.rs:73`:
-  ```rust
-  pub fn blocklist_names(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
-      self.blocklist_names = Some(names.into_iter().map(Into::into).collect());
-      self
-  }
-  ```
-
-### Cycle 3.3: RED — test image.rs categories accepts array
-- File: `sdk/azure_ai_foundry_safety/src/image.rs`
-- New test: `test_analyze_image_categories_accepts_array`
-
-### Cycle 3.4: GREEN — change image.rs
-- Same pattern as text.rs
-
-### Cycle 3.5: RED — test prompt_shields.rs documents accepts array
-- File: `sdk/azure_ai_foundry_safety/src/prompt_shields.rs`
-- New test: `test_shield_prompt_documents_accepts_array`
-
-### Cycle 3.6: GREEN — change prompt_shields.rs
-- ```rust
-  pub fn documents(mut self, documents: impl IntoIterator<Item = impl Into<String>>) -> Self {
-      self.documents = Some(documents.into_iter().map(Into::into).collect());
-      self
-  }
-  ```
-
-### Cycle 3.7: REFACTOR — verify all existing tests still pass
-- Existing tests use `Vec<T>` which implements `IntoIterator`, so no breakage expected.
-
-**Tests added**: 3 new
-
----
-
-## Finding 4 (Recommended): Missing length validations in blocklist builders
-
+**Problem**: `BlocklistItemInput.description` has no max-length validation (1024 chars) but `BlocklistUpsertRequest.description` does.
 **File**: `sdk/azure_ai_foundry_safety/src/blocklist.rs`
-**Problem**: Doc comments mention max lengths (name: 64, description: 1024, item text: 128) but builders don't enforce them. The API will reject oversized values, but client-side validation provides better UX and is consistent with `MAX_TEXT_LENGTH` validation in text.rs.
 
-### Cycle 4.1: RED — test blocklist name max length
-- File: `sdk/azure_ai_foundry_safety/src/blocklist.rs`
-- New test: `test_blocklist_upsert_rejects_name_too_long`
+### Cycle 3.1: RED — test description too long
+- Test: `test_blocklist_item_description_rejects_too_long`
   ```rust
-  let long_name = "a".repeat(65);
-  let err = BlocklistUpsertRequest::builder()
-      .blocklist_name(long_name)
-      .try_build()
-      .expect_err("should reject name > 64 chars");
-  assert!(matches!(err, FoundryError::Validation { .. }));
-  ```
-- Expected: FAILS (no length check)
-
-### Cycle 4.2: GREEN — add name length validation
-- File: `sdk/azure_ai_foundry_safety/src/blocklist.rs`
-- In `BlocklistUpsertRequestBuilder::try_build()`, after the empty check:
-  ```rust
-  const MAX_BLOCKLIST_NAME_LENGTH: usize = 64;
-  if blocklist_name.chars().count() > MAX_BLOCKLIST_NAME_LENGTH {
-      return Err(FoundryError::validation(format!(
-          "blocklist_name exceeds maximum length of {MAX_BLOCKLIST_NAME_LENGTH} characters"
-      )));
-  }
-  ```
-
-### Cycle 4.3: RED — test description max length
-- New test: `test_blocklist_upsert_rejects_description_too_long`
-  ```rust
-  let long_desc = "a".repeat(1025);
-  let err = BlocklistUpsertRequest::builder()
-      .blocklist_name("valid")
+  let long_desc = "a".repeat(MAX_DESCRIPTION_LENGTH + 1);
+  let err = BlocklistItemInput::builder()
+      .text("badword")
       .description(long_desc)
       .try_build()
       .expect_err("should reject description > 1024 chars");
   assert!(matches!(err, FoundryError::Validation { .. }));
+  assert!(err.to_string().contains("description"));
   ```
+- Expected: FAILS (no validation on description)
 
-### Cycle 4.4: GREEN — add description length validation
-- ```rust
-  const MAX_DESCRIPTION_LENGTH: usize = 1024;
+### Cycle 3.2: GREEN — add description validation to BlocklistItemInputBuilder::try_build
+- Add after text length check:
+  ```rust
   if let Some(ref desc) = self.description {
       if desc.chars().count() > MAX_DESCRIPTION_LENGTH {
           return Err(FoundryError::validation(format!(
@@ -219,266 +104,266 @@ This plan covers all findings using strict TDD methodology (RED → GREEN → RE
   }
   ```
 
-### Cycle 4.5: RED — test item text max length
-- New test: `test_blocklist_item_rejects_text_too_long`
+### Cycle 3.3: RED — test boundary value accepted
+- Test: `test_blocklist_item_description_accepts_boundary`
   ```rust
-  let long_text = "a".repeat(129);
-  let err = BlocklistItemInput::builder()
-      .text(long_text)
+  let boundary_desc = "a".repeat(MAX_DESCRIPTION_LENGTH);
+  let result = BlocklistItemInput::builder()
+      .text("badword")
+      .description(boundary_desc)
+      .try_build();
+  assert!(result.is_ok());
+  ```
+- Expected: PASSES (boundary <= 1024)
+
+**Tests**: +2 new
+
+---
+
+## F1 — Remove blocklist_name from BlocklistUpsertRequest body (CRITICAL)
+
+**Problem**: `BlocklistUpsertRequest` serializes `blocklist_name` in the body, but the Azure API expects it ONLY as a URL path parameter. The `create_or_update_blocklist` function already takes `name: &str` for the URL.
+**File**: `sdk/azure_ai_foundry_safety/src/blocklist.rs`
+
+### Cycle 1.1: RED — test body does NOT contain blocklistName
+- Test: `test_blocklist_upsert_body_does_not_contain_blocklist_name`
+  ```rust
+  let request = BlocklistUpsertRequest::builder()
+      .description("My filter")
       .try_build()
-      .expect_err("should reject text > 128 chars");
-  assert!(matches!(err, FoundryError::Validation { .. }));
-  ```
-
-### Cycle 4.6: GREEN — add item text length validation
-- In `BlocklistItemInputBuilder::try_build()`:
-  ```rust
-  const MAX_ITEM_TEXT_LENGTH: usize = 128;
-  if text.chars().count() > MAX_ITEM_TEXT_LENGTH {
-      return Err(FoundryError::validation(format!(
-          "text exceeds maximum length of {MAX_ITEM_TEXT_LENGTH} characters"
-      )));
-  }
-  ```
-
-### Cycle 4.7: RED — test boundary values (accepted)
-- New tests:
-  - `test_blocklist_upsert_accepts_name_at_boundary` — 64 chars => Ok
-  - `test_blocklist_item_accepts_text_at_boundary` — 128 chars => Ok
-
-### Cycle 4.8: GREEN — already passes (boundary is <=, not <)
-
-### Cycle 4.9: REFACTOR
-- Extract constants to top of file with doc comments
-- Verify all existing tests pass
-
-**Tests added**: 5 new
-
----
-
-## Finding 5 (Recommended): `ImageOutputType` single-variant enum
-
-**File**: `sdk/azure_ai_foundry_safety/src/models.rs:84-98`
-**Problem**: `ImageOutputType` has only one variant (`FourSeverityLevels`). The `output_type` builder method in image.rs is effectively useless since there's only one valid value. The API may add more variants in the future, so keeping the enum is fine, but the builder should document this.
-
-### Cycle 5.1: RED — test that image output_type defaults correctly
-- File: `sdk/azure_ai_foundry_safety/src/image.rs`
-- New test: `test_analyze_image_output_type_absent_by_default`
-  ```rust
-  let request = AnalyzeImageRequest::builder()
-      .blob_url("https://example.com/img.jpg")
-      .build();
+      .unwrap();
   let json = serde_json::to_value(&request).unwrap();
-  assert!(json.get("outputType").is_none(), "outputType should be absent");
+  assert!(json.get("blocklistName").is_none(),
+      "blocklistName must not be in body, got: {json}");
   ```
-- Expected: PASSES (already correct behavior)
+- Expected: FAILS (current struct serializes blocklistName)
 
-### Cycle 5.2: GREEN — add doc comment to output_type builder method
-- File: `sdk/azure_ai_foundry_safety/src/image.rs:74-78`
-- Update doc:
+### Cycle 1.2: GREEN — restructure BlocklistUpsertRequest
+- Remove `blocklist_name` field from struct
+- Remove `blocklist_name` field and method from builder
+- Builder only has `description` (with existing max-length validation)
+- Move name validation (max 64 chars) to `create_or_update_blocklist` function:
   ```rust
-  /// Sets the output type for image analysis.
-  ///
-  /// Currently only `FourSeverityLevels` is supported by the API.
-  /// This field is optional and defaults to `FourSeverityLevels` when omitted.
-  ```
-
-### Cycle 5.3: REFACTOR — no code change needed
-
-**Tests added**: 1 new (guard test)
-
----
-
-## Finding 6 (Recommended): `CONTENT_SAFETY_API_VERSION` embeds param name
-
-**File**: `sdk/azure_ai_foundry_safety/src/models.rs:6`
-**Problem**: `CONTENT_SAFETY_API_VERSION = "api-version=2024-09-01"` embeds the query parameter name in the constant. This couples the constant to URL query string usage. Better to split into version-only constant and use it explicitly in format strings.
-
-### Cycle 6.1: RED — test new constant exists
-- File: `sdk/azure_ai_foundry_safety/src/models.rs`
-- New test: `test_content_safety_version_value`
-  ```rust
-  assert_eq!(CONTENT_SAFETY_VERSION, "2024-09-01");
-  ```
-- Expected: FAILS (constant doesn't exist)
-
-### Cycle 6.2: GREEN — add version-only constant, update API version constant
-- File: `sdk/azure_ai_foundry_safety/src/models.rs`
-  ```rust
-  /// Content Safety API version.
-  pub(crate) const CONTENT_SAFETY_VERSION: &str = "2024-09-01";
-
-  /// API version query parameter for Content Safety API requests.
-  pub(crate) const CONTENT_SAFETY_API_VERSION: &str = "api-version=2024-09-01";
-  ```
-  Keep `CONTENT_SAFETY_API_VERSION` for backwards compatibility — all callers use it in
-  `format!("/path?{CONTENT_SAFETY_API_VERSION}")`. The new `CONTENT_SAFETY_VERSION` is
-  available for any future use that needs just the version string.
-
-### Cycle 6.3: REFACTOR — update existing test
-- Modify `test_api_version_constant_value` to also assert the new constant.
-
-**Tests added**: 1 modified
-
----
-
-## Finding 7 (Recommended): Doc comments on `patch` method may be incomplete
-
-**File**: `sdk/azure_ai_foundry_core/src/client.rs:477-497`
-**Problem**: The `patch` doc comment doesn't mention the `application/merge-patch+json` Content-Type in the description. Users need to know this is not a regular JSON POST.
-
-### Cycle 7.1: No test needed — documentation only
-- File: `sdk/azure_ai_foundry_core/src/client.rs`
-- Update the doc comment for `patch`:
-  ```rust
-  /// Send a PATCH request with a JSON body using `application/merge-patch+json` content type.
-  ///
-  /// Uses [RFC 7396 Merge Patch](https://tools.ietf.org/html/rfc7396) semantics.
-  /// Automatically adds authentication headers and API version.
-  /// Retries on retriable HTTP errors (429, 500, 502, 503, 504) with exponential backoff.
-  ```
-
-**Tests added**: 0
-
----
-
-## Finding 8 (Optional): Tracing test flakiness risk
-
-**Problem**: Tracing tests using `#[tracing_test::traced_test]` can be flaky in multi-threaded test runs due to global subscriber conflicts. This is a known issue (see `test_resolve_emits_auth_span` in core).
-
-### Action: No code change
-- This is a known limitation documented in MEMORY.md
-- The safety crate's tracing tests are simpler (just `logs_contain(span_name)`) and less prone to conflicts
-- Monitor for flakiness; if it appears, add `#[serial_test::serial]` attribute
-
-**Tests added**: 0
-
----
-
-## Finding 9 (Optional): Inconsistent public accessors
-
-**Problem**: `ProtectedMaterialRequest::text()` and `ShieldPromptRequest::user_prompt()` and `AnalyzeTextRequest::text()` are exposed as public accessors, but `AnalyzeImageRequest` doesn't expose its fields. Minor inconsistency.
-
-### Cycle 9.1: RED — test accessor exists
-- File: `sdk/azure_ai_foundry_safety/src/image.rs`
-- New test: `test_analyze_image_request_accessors`
-  ```rust
-  let request = AnalyzeImageRequest::builder()
-      .blob_url("https://example.com/img.jpg")
-      .build();
-  // No accessor to test — this cycle adds one
-  ```
-
-### Cycle 9.2: GREEN — add accessors to AnalyzeImageRequest
-- File: `sdk/azure_ai_foundry_safety/src/image.rs`
-  ```rust
-  impl AnalyzeImageRequest {
-      /// Returns whether this request uses base64 content.
-      pub fn has_base64_content(&self) -> bool {
-          self.image.content.is_some()
-      }
-
-      /// Returns whether this request uses a blob URL.
-      pub fn has_blob_url(&self) -> bool {
-          self.image.blob_url.is_some()
-      }
-  }
-  ```
-
-**Tests added**: 1 new
-
----
-
-## Finding 10 (Optional): `remove_blocklist_items(&[&str])` ergonomics
-
-**Problem**: `remove_blocklist_items` takes `&[&str]` for item IDs. This works but is less ergonomic than `impl IntoIterator<Item = impl AsRef<str>>`.
-
-### Cycle 10.1: RED — test that remove accepts String vec
-- File: `sdk/azure_ai_foundry_safety/src/blocklist.rs`
-- New test: `test_remove_blocklist_items_accepts_string_vec`
-  - This tests calling with `&["id1".to_string(), "id2".to_string()]` — currently fails
-    because `&[String]` doesn't coerce to `&[&str]`.
-
-### Cycle 10.2: GREEN — change signature
-- Change from `ids: &[&str]` to `ids: impl IntoIterator<Item = impl AsRef<str>>`:
-  ```rust
-  pub async fn remove_blocklist_items(
-      client: &FoundryClient,
-      name: &str,
-      ids: impl IntoIterator<Item = impl AsRef<str>>,
-  ) -> FoundryResult<()> {
-      let id_strings: Vec<String> = ids.into_iter().map(|s| s.as_ref().to_string()).collect();
-      if id_strings.is_empty() {
-          return Err(FoundryError::validation("blocklist_item_ids must not be empty"));
+  pub async fn create_or_update_blocklist(...) {
+      FoundryClient::validate_resource_id(name)?;
+      if name.chars().count() > MAX_BLOCKLIST_NAME_LENGTH {
+          return Err(FoundryError::validation(format!(
+              "blocklist name exceeds maximum length of {MAX_BLOCKLIST_NAME_LENGTH} characters"
+          )));
       }
       // ...
   }
   ```
 
-### Cycle 10.3: REFACTOR — verify existing callers still work
-- Existing tests use `&["id1", "id2"]` which implements `IntoIterator<Item = &&str>` — `&&str` implements `AsRef<str>`, so no breakage.
+### Cycle 1.3: RED — test name validation moved to API function
+- Test: `test_create_or_update_blocklist_rejects_name_too_long`
+  ```rust
+  let long_name = "a".repeat(MAX_BLOCKLIST_NAME_LENGTH + 1);
+  let request = BlocklistUpsertRequest::builder().build();
+  let err = create_or_update_blocklist(&client, &long_name, &request)
+      .await
+      .expect_err("should reject name > 64 chars");
+  assert!(matches!(err, FoundryError::Validation { .. }));
+  ```
+- Test: `test_create_or_update_blocklist_accepts_name_at_boundary`
 
-**Tests added**: 1 new
+### Cycle 1.4: REFACTOR — update all affected tests
+- Remove obsolete builder tests: `test_blocklist_upsert_requires_name`, `test_blocklist_upsert_rejects_blank_name`, `test_blocklist_upsert_rejects_name_too_long`, `test_blocklist_upsert_accepts_name_at_boundary`
+- Update tests that used `.blocklist_name("...")`: `test_blocklist_upsert_accepts_description_none`, `test_blocklist_upsert_accepts_description_some`, `test_create_or_update_blocklist_success`, `test_create_or_update_blocklist_rejects_path_traversal`
+- Update doc example in `create_or_update_blocklist`
+
+**Tests**: +3 new, -4 removed = -1 net
+
+---
+
+## F6 — Reorder validation in remove_blocklist_items
+
+**Problem**: Validates blocklist name AFTER consuming the iterator. Should validate name first.
+**File**: `sdk/azure_ai_foundry_safety/src/blocklist.rs`
+
+### Cycle 6.1: RED — test name validated before empty check
+- Test: `test_remove_blocklist_items_validates_name_before_empty_check`
+  ```rust
+  let empty: &[&str] = &[];
+  let err = remove_blocklist_items(&client, "bad/name", empty)
+      .await
+      .expect_err("should fail");
+  // After fix: error should be about invalid name, not empty ids
+  assert!(
+      err.to_string().contains("invalid") || err.to_string().contains("slash"),
+      "error should mention invalid name, got: {err}"
+  );
+  ```
+- Expected: FAILS (currently returns "item_ids must not be empty")
+
+### Cycle 6.2: GREEN — move validate_resource_id before iterator consumption
+  ```rust
+  pub async fn remove_blocklist_items(...) {
+      FoundryClient::validate_resource_id(blocklist_name)?; // FIRST
+      let id_strings: Vec<String> = item_ids.into_iter()...collect();
+      if id_strings.is_empty() { ... }
+      // ...
+  }
+  ```
+
+**Tests**: +1 new
+
+---
+
+## F2 — Remove encode_query_value and url dependency (CRITICAL)
+
+**Problem**: `encode_query_value` in `lib.rs` is dead code with `#[allow(dead_code)]`. The `url` dep exists only for it.
+**Files**: `lib.rs`, `Cargo.toml`
+
+### Cycle 2.1: GREEN — remove dead code
+- File: `sdk/azure_ai_foundry_safety/src/lib.rs` — remove `encode_query_value` function and its `#[cfg(test)] mod tests`
+- File: `sdk/azure_ai_foundry_safety/Cargo.toml` — remove `url.workspace = true`
+- Verify: `cargo clippy -p azure_ai_foundry_safety -- -D warnings` passes
+
+**Tests**: -1 removed (test_encode_query_value_encodes_spaces)
+
+---
+
+## F4+F11 — api-version query param tests
+
+**Problem**: No test verifies `api-version=2024-09-01` is actually sent as query param. The existing `test_api_version_constant_value` is trivial.
+**Files**: `text.rs`, `image.rs`, `prompt_shields.rs`, `protected_material.rs`, `blocklist.rs`, `models.rs`
+
+### Cycle 4.1: RED — test api-version in text module
+- Test: `test_analyze_text_sends_api_version_query_param`
+  ```rust
+  use wiremock::matchers::query_param;
+  Mock::given(method("POST"))
+      .and(path("/contentsafety/text:analyze"))
+      .and(query_param("api-version", "2024-09-01"))
+      .respond_with(...)
+      .expect(1)
+      .mount(&server).await;
+  ```
+- Expected: PASSES (code already sends the param)
+
+### Cycle 4.2-4.5: Same pattern for image, prompt_shields, protected_material, blocklist
+- `image.rs`: path `/contentsafety/image:analyze`
+- `prompt_shields.rs`: path `/contentsafety/text:shieldPrompt`
+- `protected_material.rs`: path `/contentsafety/text:detectProtectedMaterial`
+- `blocklist.rs`: path `/contentsafety/text/blocklists/test-list`, method PATCH
+
+### Cycle 4.6: Replace trivial test in models.rs
+- Remove `test_api_version_constant_value`
+- Replace with `test_api_version_constant_has_correct_format`:
+  ```rust
+  assert!(CONTENT_SAFETY_API_VERSION.starts_with("api-version="));
+  let version = CONTENT_SAFETY_API_VERSION.strip_prefix("api-version=").unwrap();
+  assert_eq!(version.len(), 10); // YYYY-MM-DD
+  assert_eq!(version, "2024-09-01");
+  ```
+
+**Tests**: +5 new, -1 replaced = +4 net
+
+---
+
+## F5 — traced_test for blocklist operations
+
+**Problem**: All other modules have traced_test but blocklist has none.
+**File**: `sdk/azure_ai_foundry_safety/src/blocklist.rs`
+
+### Cycle 5.1: GREEN — add traced_test for create_or_update_blocklist
+- Test: `test_create_or_update_blocklist_emits_span`
+  ```rust
+  #[tokio::test]
+  #[tracing_test::traced_test]
+  async fn test_create_or_update_blocklist_emits_span() {
+      // ... setup mock, call function
+      assert!(logs_contain("foundry::safety::create_or_update_blocklist"));
+  }
+  ```
+
+**Tests**: +1 new
+
+---
+
+## F7 — Add #[non_exhaustive] to ImageOutputType
+
+**Problem**: Single-variant enum without forward-compatibility marker.
+**File**: `sdk/azure_ai_foundry_safety/src/models.rs`
+
+### Cycle 7.1: GREEN — add attribute and doc
+- Add `#[non_exhaustive]` to `ImageOutputType` enum
+- Update doc comment with rationale about future API versions
+
+### Cycle 7.2: Test documenting the variant
+- Test: `test_image_output_type_is_non_exhaustive`
+  ```rust
+  let ot = ImageOutputType::FourSeverityLevels;
+  assert_eq!(ot.as_str(), "FourSeverityLevels");
+  ```
+
+**Tests**: +1 new
+
+---
+
+## F9 — Document next_link pagination fields
+
+**Problem**: `next_link` fields exist but no documentation on usage pattern.
+**File**: `sdk/azure_ai_foundry_safety/src/blocklist.rs`
+
+### Cycle 9.1: GREEN — add doc comments
+- Update `BlocklistList` and `BlocklistItemList` doc comments with pagination pattern
+- Update `next_link` field doc comments
+
+**Tests**: 0
+
+---
+
+## F10 — Add PartialEq/Eq derives to types
+
+**Problem**: Request/response types lack PartialEq/Eq, preventing direct comparison.
+**Files**: `text.rs`, `image.rs`, `blocklist.rs`, `prompt_shields.rs`, `protected_material.rs`
+
+### Cycle 10.1: RED — test PartialEq on request types
+- Test in `text.rs`: `test_analyze_text_request_partial_eq`
+  ```rust
+  let r1 = AnalyzeTextRequest::builder().text("hello").build();
+  let r2 = AnalyzeTextRequest::builder().text("hello").build();
+  assert_eq!(r1, r2);
+  ```
+- Test in `blocklist.rs`: `test_blocklist_object_partial_eq`
+- Expected: FAILS (no PartialEq)
+
+### Cycle 10.2: GREEN — add derives
+- Add `PartialEq, Eq` to all request/response structs
+- Also add to private `ImageSource` (contained by `AnalyzeImageRequest`)
+
+**Tests**: +2 new
 
 ---
 
 ## Summary Table
 
-| Finding | Priority | Scope | New Tests | Modified Tests |
-|---------|----------|-------|-----------|----------------|
-| F1 | Critical | `client.rs` patch method | 1 | 0 |
-| F2 | Critical | text.rs + protected_material.rs error variants | 0 | 2 |
-| F3 | Recommended | IntoIterator on builders | 3 | 0 |
-| F4 | Recommended | Blocklist length validations | 5 | 0 |
-| F5 | Recommended | ImageOutputType documentation | 1 | 0 |
-| F6 | Recommended | API version constant split | 0 | 1 |
-| F7 | Recommended | patch doc comments | 0 | 0 |
-| F8 | Optional | Tracing flakiness | 0 | 0 |
-| F9 | Optional | Image request accessors | 1 | 0 |
-| F10 | Optional | remove_blocklist_items ergonomics | 1 | 0 |
-| **Total** | | | **12** | **3** |
+| Finding | Priority | New Tests | Removed Tests | Net |
+|---------|----------|-----------|---------------|-----|
+| F8 | Refactor | +1 | 0 | +1 |
+| F3 | Recommended | +2 | 0 | +2 |
+| F1 | Critical | +3 | -4 | -1 |
+| F6 | Recommended | +1 | 0 | +1 |
+| F2 | Critical | 0 | -1 | -1 |
+| F4+F11 | Recommended | +5 | -1 | +4 |
+| F5 | Recommended | +1 | 0 | +1 |
+| F7 | Recommended | +1 | 0 | +1 |
+| F9 | Optional | 0 | 0 | 0 |
+| F10 | Optional | +2 | 0 | +2 |
+| **Total** | | **+16** | **-6** | **+10** |
 
-## Execution Order
-
-```
-F1 (patch refactor — core crate, no deps)
-  |
-  +-- F7 (patch docs — same file, do together with F1)
-  |
-F2 (error variant fix — safety crate, independent)
-  |
-F3 (IntoIterator — safety crate, independent)
-  |
-F4 (length validations — safety crate, independent)
-  |
-F5 (ImageOutputType docs — safety crate, independent)
-  |
-F6 (version constant — safety crate, independent)
-  |
-F9 (image accessors — safety crate, independent)
-  |
-F10 (remove ergonomics — safety crate, independent)
-```
-
-F1+F7 first (core crate), then F2-F6, F9-F10 (safety crate, can be done in any order).
-F8 is monitor-only, no action needed.
-
-## Estimated Impact
-
-- **New tests**: ~12
-- **Modified tests**: ~3
-- **Expected total after fixes**: ~807+ tests
-- **Implementation time**: ~2 hours
-- **Risk**: Low — all changes are localized, no architectural impact
+**Expected total after fixes**: ~818 tests
 
 ## Success Criteria
 
 - [ ] `cargo build --workspace` — no errors, no warnings
-- [ ] `cargo test --workspace` — all tests pass (807+)
+- [ ] `cargo test --workspace` — all tests pass (818+)
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` — clean
 - [ ] `cargo fmt --all -- --check` — clean
-- [ ] `patch` method uses `.json(body)` consistently with `post`
-- [ ] Text length errors use `FoundryError::Validation`, not `Builder`
-- [ ] All builder methods accepting collections use `impl IntoIterator`
-- [ ] Blocklist builders enforce documented max lengths
-- [ ] No regressions in existing 795 tests
+- [ ] `BlocklistUpsertRequest` body does NOT contain `blocklistName`
+- [ ] All limit constants centralized in `models.rs`
+- [ ] `encode_query_value` and `url` dependency removed
+- [ ] `api-version` query param verified by at least one test per module
+- [ ] No regressions in existing tests

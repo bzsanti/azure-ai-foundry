@@ -472,11 +472,11 @@ impl FoundryClient {
         .await
     }
 
-    /// Send a PATCH request with a JSON body to the API with automatic retry.
+    /// Send a PATCH request with a JSON body using `application/merge-patch+json` content type.
     ///
+    /// Uses [RFC 7396 Merge Patch](https://tools.ietf.org/html/rfc7396) semantics as required
+    /// by Azure REST API conventions for PATCH operations.
     /// Automatically adds authentication headers and API version.
-    /// Uses `Content-Type: application/merge-patch+json` as required by
-    /// Azure REST API conventions for PATCH operations.
     /// Retries on retriable HTTP errors (429, 500, 502, 503, 504) with exponential backoff.
     ///
     /// # Arguments
@@ -508,10 +508,7 @@ impl FoundryClient {
         let url = self.url(path)?;
         tracing::debug!("sending PATCH request");
 
-        let json_body = serde_json::to_vec(body).map_err(|e| FoundryError::Api {
-            code: "SerializationError".into(),
-            message: e.to_string(),
-        })?;
+        let json_body = serde_json::to_vec(body)?;
 
         self.execute_with_retry(|auth| {
             self.http
@@ -3083,5 +3080,27 @@ mod tests {
             }
             _ => panic!("Expected Api error, got {:?}", err),
         }
+    }
+
+    #[tokio::test]
+    async fn patch_sends_merge_patch_content_type() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/test/patch-ct"))
+            .and(header("Content-Type", "application/merge-patch+json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+        let body = serde_json::json!({"name": "test"});
+        let response = client
+            .patch("/test/patch-ct", &body)
+            .await
+            .expect("should succeed with merge-patch content type");
+
+        assert_eq!(response.status(), 200);
     }
 }

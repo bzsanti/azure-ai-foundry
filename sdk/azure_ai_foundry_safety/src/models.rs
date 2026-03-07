@@ -5,6 +5,18 @@ use serde::{Deserialize, Serialize};
 /// API version query parameter for Content Safety API requests.
 pub(crate) const CONTENT_SAFETY_API_VERSION: &str = "api-version=2024-09-01";
 
+/// Maximum text length for text analysis and protected material endpoints (Unicode code points).
+pub(crate) const MAX_TEXT_LENGTH: usize = 10_000;
+
+/// Maximum blocklist name length (characters).
+pub(crate) const MAX_BLOCKLIST_NAME_LENGTH: usize = 64;
+
+/// Maximum description length for blocklists and blocklist items (characters).
+pub(crate) const MAX_DESCRIPTION_LENGTH: usize = 1_024;
+
+/// Maximum blocklist item text length (characters).
+pub(crate) const MAX_ITEM_TEXT_LENGTH: usize = 128;
+
 // ---------------------------------------------------------------------------
 // Harm categories
 // ---------------------------------------------------------------------------
@@ -81,6 +93,10 @@ impl std::fmt::Display for OutputType {
 /// Output type for image content analysis severity levels.
 ///
 /// Images only support four severity levels (0, 2, 4, 6).
+///
+/// This enum is marked `#[non_exhaustive]` because the Azure Content Safety API
+/// may add new output type variants in future API versions.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ImageOutputType {
     /// Four severity levels: 0, 2, 4, 6.
@@ -216,8 +232,24 @@ mod tests {
     // -- API version constant --
 
     #[test]
-    fn test_api_version_constant_value() {
-        assert_eq!(CONTENT_SAFETY_API_VERSION, "api-version=2024-09-01");
+    fn test_api_version_constant_has_correct_format() {
+        assert!(
+            CONTENT_SAFETY_API_VERSION.starts_with("api-version="),
+            "constant must start with 'api-version='"
+        );
+        let version = CONTENT_SAFETY_API_VERSION
+            .strip_prefix("api-version=")
+            .unwrap();
+        assert_eq!(version.len(), 10, "version must be YYYY-MM-DD format");
+        assert_eq!(version, "2024-09-01");
+    }
+
+    #[test]
+    fn test_limit_constants() {
+        assert_eq!(MAX_TEXT_LENGTH, 10_000);
+        assert_eq!(MAX_BLOCKLIST_NAME_LENGTH, 64);
+        assert_eq!(MAX_DESCRIPTION_LENGTH, 1_024);
+        assert_eq!(MAX_ITEM_TEXT_LENGTH, 128);
     }
 
     // -- CategoryAnalysis --

@@ -7,18 +7,21 @@ use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
 use serde::{Deserialize, Serialize};
 
-use crate::models::CONTENT_SAFETY_API_VERSION;
+use crate::models::{
+    CONTENT_SAFETY_API_VERSION, MAX_BLOCKLIST_NAME_LENGTH, MAX_DESCRIPTION_LENGTH,
+    MAX_ITEM_TEXT_LENGTH,
+};
 
 // ---------------------------------------------------------------------------
 // Blocklist types
 // ---------------------------------------------------------------------------
 
 /// Request body for creating or updating a blocklist.
-#[derive(Debug, Clone, Serialize)]
+///
+/// The blocklist name is passed as a URL path parameter to
+/// [`create_or_update_blocklist`], not in this body.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BlocklistUpsertRequest {
-    #[serde(rename = "blocklistName")]
-    blocklist_name: String,
-
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
 }
@@ -33,17 +36,10 @@ impl BlocklistUpsertRequest {
 /// Builder for [`BlocklistUpsertRequest`].
 #[derive(Debug, Default)]
 pub struct BlocklistUpsertRequestBuilder {
-    blocklist_name: Option<String>,
     description: Option<String>,
 }
 
 impl BlocklistUpsertRequestBuilder {
-    /// Sets the blocklist name (required, max 64 characters).
-    pub fn blocklist_name(mut self, name: impl Into<String>) -> Self {
-        self.blocklist_name = Some(name.into());
-        self
-    }
-
     /// Sets the blocklist description (optional, max 1024 characters).
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
@@ -52,13 +48,15 @@ impl BlocklistUpsertRequestBuilder {
 
     /// Builds the request, returning an error if validation fails.
     pub fn try_build(self) -> FoundryResult<BlocklistUpsertRequest> {
-        let blocklist_name = self
-            .blocklist_name
-            .filter(|s| !s.trim().is_empty())
-            .ok_or_else(|| FoundryError::Builder("blocklist_name is required".into()))?;
+        if let Some(ref desc) = self.description {
+            if desc.chars().count() > MAX_DESCRIPTION_LENGTH {
+                return Err(FoundryError::validation(format!(
+                    "description exceeds maximum length of {MAX_DESCRIPTION_LENGTH} characters"
+                )));
+            }
+        }
 
         Ok(BlocklistUpsertRequest {
-            blocklist_name,
             description: self.description,
         })
     }
@@ -75,7 +73,7 @@ impl BlocklistUpsertRequestBuilder {
 }
 
 /// A blocklist object returned by the API.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BlocklistObject {
     /// The name of the blocklist.
     #[serde(rename = "blocklistName")]
@@ -86,12 +84,16 @@ pub struct BlocklistObject {
 }
 
 /// Paginated list of blocklists.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// When `next_link` is `Some`, there are more results available. Pass the
+/// URL to the client's GET method to retrieve the next page.
+/// When `next_link` is `None`, this is the last page.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BlocklistList {
     /// The blocklist objects in the current page.
     pub value: Vec<BlocklistObject>,
 
-    /// Link to the next page of results, if available.
+    /// Link to the next page of results. `None` indicates this is the last page.
     #[serde(rename = "nextLink", default)]
     pub next_link: Option<String>,
 }
@@ -101,7 +103,7 @@ pub struct BlocklistList {
 // ---------------------------------------------------------------------------
 
 /// Input for creating or updating a blocklist item.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BlocklistItemInput {
     text: String,
 
@@ -153,6 +155,20 @@ impl BlocklistItemInputBuilder {
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| FoundryError::Builder("text is required".into()))?;
 
+        if text.chars().count() > MAX_ITEM_TEXT_LENGTH {
+            return Err(FoundryError::validation(format!(
+                "text exceeds maximum length of {MAX_ITEM_TEXT_LENGTH} characters"
+            )));
+        }
+
+        if let Some(ref desc) = self.description {
+            if desc.chars().count() > MAX_DESCRIPTION_LENGTH {
+                return Err(FoundryError::validation(format!(
+                    "description exceeds maximum length of {MAX_DESCRIPTION_LENGTH} characters"
+                )));
+            }
+        }
+
         Ok(BlocklistItemInput {
             text,
             description: self.description,
@@ -172,7 +188,7 @@ impl BlocklistItemInputBuilder {
 }
 
 /// Request body for adding or updating blocklist items.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AddOrUpdateBlocklistItemsRequest {
     #[serde(rename = "blocklistItems")]
     blocklist_items: Vec<BlocklistItemInput>,
@@ -197,7 +213,7 @@ impl AddOrUpdateBlocklistItemsRequest {
 }
 
 /// A blocklist item object returned by the API.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BlocklistItemObject {
     /// The unique ID of the blocklist item.
     #[serde(rename = "blocklistItemId")]
@@ -215,7 +231,7 @@ pub struct BlocklistItemObject {
 }
 
 /// Response from adding or updating blocklist items.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct AddOrUpdateBlocklistItemsResponse {
     /// The created or updated blocklist items.
     #[serde(rename = "blocklistItems")]
@@ -223,12 +239,16 @@ pub struct AddOrUpdateBlocklistItemsResponse {
 }
 
 /// Paginated list of blocklist items.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// When `next_link` is `Some`, there are more results available. Pass the
+/// URL to the client's GET method to retrieve the next page.
+/// When `next_link` is `None`, this is the last page.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BlocklistItemList {
     /// The blocklist items in the current page.
     pub value: Vec<BlocklistItemObject>,
 
-    /// Link to the next page of results, if available.
+    /// Link to the next page of results. `None` indicates this is the last page.
     #[serde(rename = "nextLink", default)]
     pub next_link: Option<String>,
 }
@@ -261,9 +281,8 @@ pub struct BlocklistItemList {
 ///     .build()?;
 ///
 /// let request = BlocklistUpsertRequest::builder()
-///     .blocklist_name("profanity")
 ///     .description("Common profanity terms")
-///     .try_build()?;
+///     .build();
 ///
 /// let blocklist = blocklist::create_or_update_blocklist(&client, "profanity", &request).await?;
 /// println!("Blocklist: {}", blocklist.blocklist_name);
@@ -286,6 +305,11 @@ pub async fn create_or_update_blocklist(
     request: &BlocklistUpsertRequest,
 ) -> FoundryResult<BlocklistObject> {
     FoundryClient::validate_resource_id(name)?;
+    if name.chars().count() > MAX_BLOCKLIST_NAME_LENGTH {
+        return Err(FoundryError::validation(format!(
+            "blocklist name exceeds maximum length of {MAX_BLOCKLIST_NAME_LENGTH} characters"
+        )));
+    }
     tracing::debug!("creating or updating blocklist");
 
     let path = format!("/contentsafety/text/blocklists/{name}?{CONTENT_SAFETY_API_VERSION}");
@@ -500,19 +524,24 @@ pub async fn list_blocklist_items(
 pub async fn remove_blocklist_items(
     client: &FoundryClient,
     blocklist_name: &str,
-    item_ids: &[&str],
+    item_ids: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> FoundryResult<()> {
-    if item_ids.is_empty() {
+    FoundryClient::validate_resource_id(blocklist_name)?;
+
+    let id_strings: Vec<String> = item_ids
+        .into_iter()
+        .map(|s| s.as_ref().to_string())
+        .collect();
+    if id_strings.is_empty() {
         return Err(FoundryError::validation("item_ids must not be empty"));
     }
-    FoundryClient::validate_resource_id(blocklist_name)?;
     tracing::debug!("removing blocklist items");
 
     let path = format!(
         "/contentsafety/text/blocklists/{blocklist_name}:removeBlocklistItems?{CONTENT_SAFETY_API_VERSION}"
     );
     let body = serde_json::json!({
-        "blocklistItemIds": item_ids
+        "blocklistItemIds": id_strings
     });
     let _response = client.post(&path, &body).await?;
 
@@ -528,7 +557,7 @@ pub async fn remove_blocklist_items(
 mod tests {
     use super::*;
     use crate::test_utils::setup_mock_client;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // -----------------------------------------------------------------------
@@ -538,33 +567,26 @@ mod tests {
     // -- BlocklistUpsertRequest builder --
 
     #[test]
-    fn test_blocklist_upsert_requires_name() {
-        let result = BlocklistUpsertRequest::builder().try_build();
-        let err = result.expect_err("should require name");
-        assert!(err.to_string().contains("blocklist_name"), "error: {err}");
-    }
-
-    #[test]
-    fn test_blocklist_upsert_rejects_blank_name() {
-        let result = BlocklistUpsertRequest::builder()
-            .blocklist_name("  ")
-            .try_build();
-        let err = result.expect_err("should reject blank name");
-        assert!(err.to_string().contains("blocklist_name"), "error: {err}");
+    fn test_blocklist_upsert_body_does_not_contain_blocklist_name() {
+        let request = BlocklistUpsertRequest::builder()
+            .description("My filter")
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(
+            json.get("blocklistName").is_none(),
+            "blocklistName must not be in body, got: {json}"
+        );
     }
 
     #[test]
     fn test_blocklist_upsert_accepts_description_none() {
-        let result = BlocklistUpsertRequest::builder()
-            .blocklist_name("profanity")
-            .try_build();
+        let result = BlocklistUpsertRequest::builder().try_build();
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_blocklist_upsert_accepts_description_some() {
         let result = BlocklistUpsertRequest::builder()
-            .blocklist_name("profanity")
             .description("Profanity filter")
             .try_build();
         assert!(result.is_ok());
@@ -596,7 +618,6 @@ mod tests {
             .await;
 
         let request = BlocklistUpsertRequest::builder()
-            .blocklist_name("profanity")
             .description("Profanity filter")
             .build();
 
@@ -607,13 +628,55 @@ mod tests {
     }
 
     #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_create_or_update_blocklist_emits_span() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/contentsafety/text/blocklists/profanity"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "blocklistName": "profanity",
+                "description": null
+            })))
+            .mount(&server)
+            .await;
+
+        let request = BlocklistUpsertRequest::builder().build();
+        let _ = create_or_update_blocklist(&client, "profanity", &request).await;
+        assert!(logs_contain("foundry::safety::create_or_update_blocklist"));
+    }
+
+    #[tokio::test]
+    async fn test_create_or_update_blocklist_sends_api_version_query_param() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        Mock::given(method("PATCH"))
+            .and(path("/contentsafety/text/blocklists/test-list"))
+            .and(query_param("api-version", "2024-09-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "blocklistName": "test-list",
+                "description": null
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let request = BlocklistUpsertRequest::builder().build();
+        let result = create_or_update_blocklist(&client, "test-list", &request).await;
+        assert!(
+            result.is_ok(),
+            "request should match with api-version query param"
+        );
+    }
+
+    #[tokio::test]
     async fn test_create_or_update_blocklist_rejects_path_traversal() {
         let server = MockServer::start().await;
         let client = setup_mock_client(&server).await;
 
-        let request = BlocklistUpsertRequest::builder()
-            .blocklist_name("../etc")
-            .build();
+        let request = BlocklistUpsertRequest::builder().build();
 
         let err = create_or_update_blocklist(&client, "../etc", &request)
             .await
@@ -945,12 +1008,149 @@ mod tests {
         let server = MockServer::start().await;
         let client = setup_mock_client(&server).await;
 
-        let err = remove_blocklist_items(&client, "profanity", &[])
+        let empty: &[&str] = &[];
+        let err = remove_blocklist_items(&client, "profanity", empty)
             .await
             .expect_err("should reject empty ids");
         assert!(
             matches!(err, FoundryError::Validation { .. }),
             "expected Validation, got: {err:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_remove_blocklist_items_validates_name_before_empty_check() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let empty: &[&str] = &[];
+        // With invalid name AND empty ids, error should be about the name, not empty ids
+        let err = remove_blocklist_items(&client, "bad/name", empty)
+            .await
+            .expect_err("should fail");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("item_ids"),
+            "should fail on name validation first, not empty ids; got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_or_update_blocklist_rejects_name_too_long() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+        let long_name = "a".repeat(MAX_BLOCKLIST_NAME_LENGTH + 1);
+        let request = BlocklistUpsertRequest::builder().build();
+        let err = create_or_update_blocklist(&client, &long_name, &request)
+            .await
+            .expect_err("should reject name > 64 chars");
+        assert!(
+            matches!(err, FoundryError::Validation { .. }),
+            "expected Validation, got: {err:?}"
+        );
+        assert!(err.to_string().contains("maximum length"), "error: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_create_or_update_blocklist_accepts_name_at_boundary() {
+        let server = MockServer::start().await;
+        let name = "a".repeat(MAX_BLOCKLIST_NAME_LENGTH);
+
+        Mock::given(method("PATCH"))
+            .and(path(format!("/contentsafety/text/blocklists/{name}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "blocklistName": name,
+                "description": null
+            })))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+        let request = BlocklistUpsertRequest::builder().build();
+        let result = create_or_update_blocklist(&client, &name, &request).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_blocklist_upsert_rejects_description_too_long() {
+        let long_desc = "a".repeat(MAX_DESCRIPTION_LENGTH + 1);
+        let err = BlocklistUpsertRequest::builder()
+            .description(long_desc)
+            .try_build()
+            .expect_err("should reject description > 1024 chars");
+        assert!(
+            matches!(err, FoundryError::Validation { .. }),
+            "expected Validation, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_blocklist_item_rejects_text_too_long() {
+        let long_text = "a".repeat(129);
+        let err = BlocklistItemInput::builder()
+            .text(long_text)
+            .try_build()
+            .expect_err("should reject text > 128 chars");
+        assert!(
+            matches!(err, FoundryError::Validation { .. }),
+            "expected Validation, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_blocklist_item_accepts_text_at_boundary() {
+        let text = "a".repeat(128);
+        let result = BlocklistItemInput::builder().text(text).try_build();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_remove_blocklist_items_accepts_string_vec() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path(
+                "/contentsafety/text/blocklists/profanity:removeBlocklistItems",
+            ))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&server)
+            .await;
+
+        let client = setup_mock_client(&server).await;
+        let ids = vec!["id1".to_string(), "id2".to_string()];
+        let result = remove_blocklist_items(&client, "profanity", ids).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_blocklist_item_description_rejects_too_long() {
+        let long_desc = "a".repeat(MAX_DESCRIPTION_LENGTH + 1);
+        let err = BlocklistItemInput::builder()
+            .text("badword")
+            .description(long_desc)
+            .try_build()
+            .expect_err("should reject description > 1024 chars");
+        assert!(
+            matches!(err, FoundryError::Validation { .. }),
+            "expected Validation, got: {err:?}"
+        );
+        assert!(err.to_string().contains("description"), "error: {err}");
+    }
+
+    #[test]
+    fn test_blocklist_item_description_accepts_boundary() {
+        let boundary_desc = "a".repeat(MAX_DESCRIPTION_LENGTH);
+        let result = BlocklistItemInput::builder()
+            .text("badword")
+            .description(boundary_desc)
+            .try_build();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_blocklist_object_partial_eq() {
+        let json = r#"{"blocklistName": "list", "description": null}"#;
+        let b1: BlocklistObject = serde_json::from_str(json).unwrap();
+        let b2: BlocklistObject = serde_json::from_str(json).unwrap();
+        assert_eq!(b1, b2);
     }
 }

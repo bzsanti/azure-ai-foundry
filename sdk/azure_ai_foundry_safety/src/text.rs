@@ -7,17 +7,16 @@ use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
 use serde::{Deserialize, Serialize};
 
-use crate::models::{CategoryAnalysis, HarmCategory, OutputType, CONTENT_SAFETY_API_VERSION};
-
-/// Maximum text length allowed by the Content Safety API (Unicode code points).
-const MAX_TEXT_LENGTH: usize = 10_000;
+use crate::models::{
+    CategoryAnalysis, HarmCategory, OutputType, CONTENT_SAFETY_API_VERSION, MAX_TEXT_LENGTH,
+};
 
 // ---------------------------------------------------------------------------
 // Request types
 // ---------------------------------------------------------------------------
 
 /// Request body for the text content analysis endpoint.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AnalyzeTextRequest {
     text: String,
 
@@ -64,14 +63,14 @@ impl AnalyzeTextRequestBuilder {
     }
 
     /// Sets the harm categories to analyze. If not set, all categories are analyzed.
-    pub fn categories(mut self, categories: Vec<HarmCategory>) -> Self {
-        self.categories = Some(categories);
+    pub fn categories(mut self, categories: impl IntoIterator<Item = HarmCategory>) -> Self {
+        self.categories = Some(categories.into_iter().collect());
         self
     }
 
     /// Sets blocklist names to check against.
-    pub fn blocklist_names(mut self, names: Vec<String>) -> Self {
-        self.blocklist_names = Some(names);
+    pub fn blocklist_names(mut self, names: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.blocklist_names = Some(names.into_iter().map(Into::into).collect());
         self
     }
 
@@ -95,7 +94,7 @@ impl AnalyzeTextRequestBuilder {
             .ok_or_else(|| FoundryError::Builder("text is required".into()))?;
 
         if text.chars().count() > MAX_TEXT_LENGTH {
-            return Err(FoundryError::Builder(format!(
+            return Err(FoundryError::validation(format!(
                 "text exceeds maximum length of {MAX_TEXT_LENGTH} characters"
             )));
         }
@@ -125,7 +124,7 @@ impl AnalyzeTextRequestBuilder {
 // ---------------------------------------------------------------------------
 
 /// Response from the text content analysis endpoint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct AnalyzeTextResponse {
     /// Analysis results per harm category.
     #[serde(rename = "categoriesAnalysis")]
@@ -137,7 +136,7 @@ pub struct AnalyzeTextResponse {
 }
 
 /// A match against a blocklist item.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BlocklistMatch {
     /// The name of the blocklist that matched.
     #[serde(rename = "blocklistName")]
@@ -222,7 +221,7 @@ pub async fn analyze_text(
 mod tests {
     use super::*;
     use crate::test_utils::setup_mock_client;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // -- Builder validation --
@@ -246,6 +245,10 @@ mod tests {
         let long_text = "a".repeat(MAX_TEXT_LENGTH + 1);
         let result = AnalyzeTextRequest::builder().text(long_text).try_build();
         let err = result.expect_err("should reject text over 10000 chars");
+        assert!(
+            matches!(err, FoundryError::Validation { .. }),
+            "expected Validation error, got: {err}"
+        );
         assert!(err.to_string().contains("maximum length"), "error: {err}");
     }
 
@@ -256,6 +259,29 @@ mod tests {
             .text(boundary_text)
             .try_build();
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_analyze_text_categories_accepts_array() {
+        let request = AnalyzeTextRequest::builder()
+            .text("test")
+            .categories([HarmCategory::Hate, HarmCategory::Violence])
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["categories"], serde_json::json!(["Hate", "Violence"]));
+    }
+
+    #[test]
+    fn test_analyze_text_blocklist_names_accepts_array() {
+        let request = AnalyzeTextRequest::builder()
+            .text("test")
+            .blocklist_names(["list1", "list2"])
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            json["blocklistNames"],
+            serde_json::json!(["list1", "list2"])
+        );
     }
 
     #[test]
@@ -274,8 +300,8 @@ mod tests {
     fn test_analyze_text_serializes_all_fields() {
         let request = AnalyzeTextRequest::builder()
             .text("test")
-            .categories(vec![HarmCategory::Hate, HarmCategory::Violence])
-            .blocklist_names(vec!["profanity".into()])
+            .categories([HarmCategory::Hate, HarmCategory::Violence])
+            .blocklist_names(["profanity"])
             .halt_on_blocklist_hit(true)
             .output_type(OutputType::EightSeverityLevels)
             .build();
@@ -406,5 +432,38 @@ mod tests {
 
         let _ = analyze_text(&client, &request).await;
         assert!(logs_contain("foundry::safety::analyze_text"));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_text_sends_api_version_query_param() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        Mock::given(method("POST"))
+            .and(path("/contentsafety/text:analyze"))
+            .and(query_param("api-version", "2024-09-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "categoriesAnalysis": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let request = AnalyzeTextRequest::builder().text("test").build();
+        let result = analyze_text(&client, &request).await;
+        assert!(
+            result.is_ok(),
+            "request should match with api-version query param"
+        );
+    }
+
+    #[test]
+    fn test_analyze_text_request_partial_eq() {
+        let r1 = AnalyzeTextRequest::builder().text("hello").build();
+        let r2 = AnalyzeTextRequest::builder().text("hello").build();
+        assert_eq!(r1, r2);
+
+        let r3 = AnalyzeTextRequest::builder().text("world").build();
+        assert_ne!(r1, r3);
     }
 }

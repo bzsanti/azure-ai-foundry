@@ -7,17 +7,14 @@ use azure_ai_foundry_core::client::FoundryClient;
 use azure_ai_foundry_core::error::{FoundryError, FoundryResult};
 use serde::{Deserialize, Serialize};
 
-use crate::models::CONTENT_SAFETY_API_VERSION;
-
-/// Maximum text length allowed by the API (Unicode code points).
-const MAX_TEXT_LENGTH: usize = 10_000;
+use crate::models::{CONTENT_SAFETY_API_VERSION, MAX_TEXT_LENGTH};
 
 // ---------------------------------------------------------------------------
 // Request types
 // ---------------------------------------------------------------------------
 
 /// Request body for the protected material detection endpoint.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProtectedMaterialRequest {
     text: String,
 }
@@ -55,7 +52,7 @@ impl ProtectedMaterialRequestBuilder {
             .ok_or_else(|| FoundryError::Builder("text is required".into()))?;
 
         if text.chars().count() > MAX_TEXT_LENGTH {
-            return Err(FoundryError::Builder(format!(
+            return Err(FoundryError::validation(format!(
                 "text exceeds maximum length of {MAX_TEXT_LENGTH} characters"
             )));
         }
@@ -79,14 +76,14 @@ impl ProtectedMaterialRequestBuilder {
 // ---------------------------------------------------------------------------
 
 /// Details of the protected material analysis.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ProtectedMaterialAnalysis {
     /// Whether protected material was detected in the text.
     pub detected: bool,
 }
 
 /// Response from the protected material detection endpoint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ProtectedMaterialResponse {
     /// The analysis result.
     #[serde(rename = "protectedMaterialAnalysis")]
@@ -160,7 +157,7 @@ pub async fn detect_protected_material(
 mod tests {
     use super::*;
     use crate::test_utils::setup_mock_client;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // -- Builder validation --
@@ -186,6 +183,10 @@ mod tests {
             .text(long_text)
             .try_build();
         let err = result.expect_err("should reject long text");
+        assert!(
+            matches!(err, FoundryError::Validation { .. }),
+            "expected Validation error, got: {err}"
+        );
         assert!(err.to_string().contains("maximum length"), "error: {err}");
     }
 
@@ -295,5 +296,28 @@ mod tests {
 
         let _ = detect_protected_material(&client, &request).await;
         assert!(logs_contain("foundry::safety::detect_protected_material"));
+    }
+
+    #[tokio::test]
+    async fn test_detect_protected_material_sends_api_version_query_param() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        Mock::given(method("POST"))
+            .and(path("/contentsafety/text:detectProtectedMaterial"))
+            .and(query_param("api-version", "2024-09-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "protectedMaterialAnalysis": {"detected": false}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let request = ProtectedMaterialRequest::builder().text("test").build();
+        let result = detect_protected_material(&client, &request).await;
+        assert!(
+            result.is_ok(),
+            "request should match with api-version query param"
+        );
     }
 }

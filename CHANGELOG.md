@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-03-08
+
+### Added
+
+#### New Crate: `azure_ai_foundry_safety` (Content Safety API v2024-09-01)
+
+**Text Content Analysis**
+- `analyze_text()` — detect harmful content (hate, self-harm, sexual, violence)
+- `AnalyzeTextRequest` builder with categories, blocklist names, halt-on-blocklist, output type
+- Configurable severity output: `FourSeverityLevels` or `EightSeverityLevels`
+- Maximum text length validation (10,000 Unicode code points)
+
+**Image Content Analysis**
+- `analyze_image()` — detect harmful content in images
+- `AnalyzeImageRequest` builder with base64 content or Azure Blob URL input
+- `has_base64_content()` / `has_blob_url()` accessors
+
+**Prompt Shields**
+- `shield_prompt()` — detect jailbreak and injection attacks
+- `ShieldPromptRequest` builder with user prompt and optional documents
+
+**Protected Material Detection**
+- `detect_protected_material()` — detect copyrighted content (lyrics, articles, code)
+- `ProtectedMaterialRequest` builder with text length validation
+
+**Blocklist Management (CRUD)**
+- `create_or_update_blocklist()` — create/update via PATCH with `application/merge-patch+json`
+- `get_blocklist()`, `list_blocklists()`, `delete_blocklist()`
+- `add_or_update_blocklist_items()`, `get_blocklist_item()`, `list_blocklist_items()`
+- `remove_blocklist_items()` — accepts `impl IntoIterator<Item = impl AsRef<str>>`
+- `BlocklistUpsertRequest` builder (body contains description only; name is a URL path parameter)
+- `BlocklistItemInput` builder with text, description, is_regex fields
+- Paginated list responses with `next_link` for cursor-based navigation
+
+**Shared Types**
+- `HarmCategory` enum (Hate, SelfHarm, Sexual, Violence)
+- `OutputType` enum (FourSeverityLevels, EightSeverityLevels)
+- `ImageOutputType` enum (`#[non_exhaustive]`, FourSeverityLevels)
+- `CategoryAnalysis` with category and severity fields
+- All request/response types derive `PartialEq, Eq`
+
+**Validation**
+- Client-side max-length enforcement: text (10,000), blocklist name (64), description (1,024), item text (128)
+- All length errors use `FoundryError::Validation` (not `Builder`)
+- Name validation order: resource ID check before iterator consumption
+- Centralized limit constants in `models.rs`
+
+**Core Crate Enhancement**
+- `FoundryClient::patch()` method for PATCH requests with `application/merge-patch+json`
+- Serialization errors use `FoundryError::Serialization` (was incorrectly `Api`)
+
+**Quality**
+- Builder methods accept `impl IntoIterator` (categories, blocklist_names, documents)
+- `api-version=2024-09-01` query parameter verified by tests in every module
+- Tracing instrumentation on all API functions with `foundry::safety::*` spans
+- 104 unit tests + 6 doc-tests in the safety crate
+- 818 total workspace tests
+
 ## [0.7.0] - 2026-03-04
 
 ### Changed

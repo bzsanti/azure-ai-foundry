@@ -14,7 +14,7 @@ use crate::models::CONTENT_SAFETY_API_VERSION;
 // ---------------------------------------------------------------------------
 
 /// Request body for the Prompt Shields endpoint.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ShieldPromptRequest {
     #[serde(rename = "userPrompt")]
     user_prompt: String,
@@ -50,8 +50,8 @@ impl ShieldPromptRequestBuilder {
     }
 
     /// Sets documents to analyze for indirect injection attacks (optional).
-    pub fn documents(mut self, documents: Vec<String>) -> Self {
-        self.documents = Some(documents);
+    pub fn documents(mut self, documents: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.documents = Some(documents.into_iter().map(Into::into).collect());
         self
     }
 
@@ -84,7 +84,7 @@ impl ShieldPromptRequestBuilder {
 // ---------------------------------------------------------------------------
 
 /// Analysis result indicating whether an attack was detected.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct AttackAnalysis {
     /// Whether an injection attack was detected.
     #[serde(rename = "attackDetected")]
@@ -92,7 +92,7 @@ pub struct AttackAnalysis {
 }
 
 /// Response from the Prompt Shields endpoint.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ShieldPromptResponse {
     /// Analysis of the user prompt for direct injection attacks.
     #[serde(rename = "userPromptAnalysis")]
@@ -166,7 +166,7 @@ pub async fn shield_prompt(
 mod tests {
     use super::*;
     use crate::test_utils::setup_mock_client;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // -- Builder validation --
@@ -199,7 +199,7 @@ mod tests {
     fn test_shield_prompt_accepts_documents() {
         let result = ShieldPromptRequest::builder()
             .user_prompt("Summarize this")
-            .documents(vec!["Document content here".into()])
+            .documents(["Document content here"])
             .try_build();
         assert!(result.is_ok());
     }
@@ -219,7 +219,7 @@ mod tests {
     fn test_shield_prompt_serializes_with_documents() {
         let request = ShieldPromptRequest::builder()
             .user_prompt("test")
-            .documents(vec!["doc1".into(), "doc2".into()])
+            .documents(["doc1", "doc2"])
             .build();
 
         let json = serde_json::to_value(&request).expect("should serialize");
@@ -282,7 +282,7 @@ mod tests {
 
         let request = ShieldPromptRequest::builder()
             .user_prompt("What is the weather?")
-            .documents(vec!["Some document".into()])
+            .documents(["Some document"])
             .build();
 
         let result = shield_prompt(&client, &request)
@@ -339,5 +339,39 @@ mod tests {
 
         let _ = shield_prompt(&client, &request).await;
         assert!(logs_contain("foundry::safety::shield_prompt"));
+    }
+
+    #[test]
+    fn test_shield_prompt_documents_accepts_array() {
+        let request = ShieldPromptRequest::builder()
+            .user_prompt("test prompt")
+            .documents(["doc1", "doc2"])
+            .build();
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["documents"], serde_json::json!(["doc1", "doc2"]));
+    }
+
+    #[tokio::test]
+    async fn test_shield_prompt_sends_api_version_query_param() {
+        let server = MockServer::start().await;
+        let client = setup_mock_client(&server).await;
+
+        Mock::given(method("POST"))
+            .and(path("/contentsafety/text:shieldPrompt"))
+            .and(query_param("api-version", "2024-09-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "userPromptAnalysis": {"attackDetected": false},
+                "documentsAnalysis": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let request = ShieldPromptRequest::builder().user_prompt("test").build();
+        let result = shield_prompt(&client, &request).await;
+        assert!(
+            result.is_ok(),
+            "request should match with api-version query param"
+        );
     }
 }

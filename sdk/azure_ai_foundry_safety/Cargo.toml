@@ -21,7 +21,6 @@ serde_json.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-url.workspace = true
 
 [dev-dependencies]
 azure_ai_foundry_core = { path = "../azure_ai_foundry_core", version = "0.8.0", features = ["test-support"] }
